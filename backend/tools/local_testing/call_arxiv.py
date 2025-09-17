@@ -1,7 +1,7 @@
 import sys
 import os
 import json
-from backend.tools.search_semantic_scholar.app import lambda_handler
+from backend.tools.search_arxiv.app import lambda_handler
 
 
 class DummyContext:
