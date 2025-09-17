@@ -91,23 +91,6 @@ These instructions will get you a copy of the project up and running on your loc
 
 ### **Backend Setup**
 
-The backend is defined in the `template.yaml` file and can be deployed using the AWS SAM CLI.
-
-```bash
-# Navigate to the backend directory
-cd backend/
-
-# Build the serverless application
-sam build
-
-# Deploy the application to AWS using the guided tour
-sam deploy --guided
-```
-
-````
-
-SAM will guide you through the deployment, asking for a stack name and region. It will output the API Gateway endpoint URL upon completion.
-
 ### **Frontend Setup**
 
 The frontend is a standard React application.
@@ -157,8 +140,6 @@ The application will be available at `http://localhost:5173`.
 ├── .gitignore
 └── README.md
 ```
-
-````
 
 ## **Our Team**
 

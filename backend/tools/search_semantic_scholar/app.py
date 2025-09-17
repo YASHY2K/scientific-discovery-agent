@@ -1,6 +1,7 @@
 import json
 import requests
 
+
 def lambda_handler(event, context):
     """
     Lambda function to search for papers on Semantic Scholar.
@@ -21,7 +22,7 @@ def lambda_handler(event, context):
         # Call the Semantic Scholar API
         response = requests.get(
             "https://api.semanticscholar.org/graph/v1/paper/search",
-            params={"query": query, "limit": 10, "fields": "title,authors,abstract,url"},
+            params={"query": query, "limit": 3, "fields": "title,authors,abstract,url"},
         )
         response.raise_for_status()  # Raise an exception for bad status codes
 
