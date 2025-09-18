@@ -1,7 +1,11 @@
 import sys
 import os
 import json
-from backend.tools.search_semantic_scholar.app import lambda_handler
+
+sys.path.append(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+from tools.search_semantic_scholar.app import lambda_handler
 
 
 class DummyContext:
@@ -38,13 +42,13 @@ def run_test_event(query_value):
 
 if __name__ == "__main__":
     # Test with no query provided
-    run_test_event(None)
+    # run_test_event(None)
 
-    # Test with an empty query string
-    run_test_event("")
+    # # Test with an empty query string
+    # run_test_event("")
 
     # Test with a normal query
-    run_test_event("transformers nlp")
+    run_test_event("transformers")
 
     # Possibly test with a special string that might trigger errors, e.g. very long string
     # run_test_event("a" * 5000)
