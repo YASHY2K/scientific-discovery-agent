@@ -3,10 +3,11 @@ import json
 import logging
 import requests
 import io
-import PyPDF2
+import PyPDF2  # Ensure this is PyPDF2 v3.0.0+
+import concurrent.futures  # For parallel processing in batch
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 # Initialize logging
 logger = logging.getLogger()
@@ -23,106 +24,144 @@ class PDFExtractionError(Exception):
     pass
 
 
-def convert_arxiv_url_to_pdf(url: str) -> str:
-    """Convert an arXiv abstract URL to its corresponding PDF URL."""
-    parsed_url = urlparse(url)
+# NOTE: convert_arxiv_url_to_pdf is REMOVED from here.
+# The agent will handle the conversion before calling this Lambda.
+
+
+def extract_arxiv_metadata_from_pdf_url(pdf_url: str) -> Dict[str, Any]:
+    """Extract metadata from a direct arXiv PDF URL."""
+    parsed_url = urlparse(pdf_url)
     path_parts = parsed_url.path.strip("/").split("/")
 
-    if len(path_parts) < 2:
-        raise ValueError("Invalid arXiv URL format")
-
-    if path_parts[0] == "abs":
-        path_parts[0] = "pdf"
-        if not path_parts[-1].endswith(".pdf"):
-            path_parts[-1] = f"{path_parts[-1]}.pdf"
-
-    new_path = "/" + "/".join(path_parts)
-    return urlunparse((parsed_url.scheme, parsed_url.netloc, new_path, "", "", ""))
-
-
-def extract_arxiv_metadata(url: str) -> Dict[str, Any]:
-    """Extract metadata from an arXiv URL."""
-    parsed_url = urlparse(url)
-    path_parts = parsed_url.path.strip("/").split("/")
-
-    if len(path_parts) < 2:
-        raise ValueError("Invalid arXiv URL format")
+    if len(path_parts) < 2 or not path_parts[-1].endswith(".pdf"):
+        raise ValueError(f"Invalid arXiv PDF URL format: {pdf_url}")
 
     paper_id = path_parts[-1].replace(".pdf", "")
+
+    # Attempt to derive the abstract URL from the PDF URL
+    abs_path_parts = list(path_parts)
+    if abs_path_parts[0] == "pdf":
+        abs_path_parts[0] = "abs"
+    abstract_url = urlunparse(
+        (
+            parsed_url.scheme,
+            parsed_url.netloc,
+            "/" + "/".join(abs_path_parts).replace(".pdf", ""),
+            "",
+            "",
+            "",
+        )
+    )
+
     return {
         "paper_id": paper_id,
         "source": "arxiv",
-        "url": url,
+        "pdf_url": pdf_url,
+        "abstract_url": abstract_url,  # Store original abstract URL if available
         "extracted_timestamp": int(datetime.utcnow().timestamp()),
-        "pdf_url": convert_arxiv_url_to_pdf(url),
     }
 
 
-def extract_text_from_pdf(url: str) -> Dict[str, Any]:
-    """Core logic to extract text from a PDF URL."""
+def _extract_text_from_single_pdf(pdf_url: str) -> Dict[str, Any]:
+    """Internal core logic to extract text from a single PDF URL."""
     try:
-        # Download PDF with timeout
-        logger.info(f"Downloading PDF from {url}")
-        response = requests.get(url, timeout=TIMEOUT)
+        logger.info(f"Downloading PDF from {pdf_url}")
+        response = requests.get(pdf_url, timeout=TIMEOUT)
         response.raise_for_status()
 
-        # Create a file-like object from the downloaded content
         pdf_file = io.BytesIO(response.content)
         pdf_reader = PyPDF2.PdfReader(pdf_file)
 
-        # Extract text from all pages with structure
         pages = []
         for i, page in enumerate(pdf_reader.pages, 1):
             text = page.extract_text()
             pages.append({"page_number": i, "content": text, "char_count": len(text)})
 
         return {
+            "status": "success",
+            "pdf_url": pdf_url,
             "total_pages": len(pdf_reader.pages),
             "pages": pages,
             "total_chars": sum(page["char_count"] for page in pages),
         }
 
     except requests.RequestException as e:
-        raise PDFExtractionError(f"Failed to download PDF: {str(e)}")
-    except PyPDF2.PdfReadError as e:
-        raise PDFExtractionError(f"Failed to read PDF: {str(e)}")
+        logger.error(f"Failed to download PDF {pdf_url}: {str(e)}")
+        return {
+            "status": "error",
+            "pdf_url": pdf_url,
+            "error_message": f"Failed to download PDF: {str(e)}",
+        }
+    except PyPDF2.errors.PdfReadError as e:  # <-- THE CRITICAL FIX for PyPDF2 v3.0.0+
+        logger.error(f"Failed to read PDF {pdf_url}: {str(e)}")
+        return {
+            "status": "error",
+            "pdf_url": pdf_url,
+            "error_message": f"Failed to read PDF: {str(e)}",
+        }
     except Exception as e:
-        raise PDFExtractionError(f"Unexpected error during PDF processing: {str(e)}")
+        logger.exception(f"Unexpected error during PDF processing for {pdf_url}")
+        return {
+            "status": "error",
+            "pdf_url": pdf_url,
+            "error_message": f"Unexpected error: {str(e)}",
+        }
 
 
 def lambda_handler(event, context):
-    """AWS Lambda handler function."""
+    """
+    AWS Lambda handler that accepts a list of direct PDF URLs for batch processing.
+    """
     try:
-        logger.info(f"Received event: {event}")
+        logger.info(f"Received event: {json.dumps(event)}")
         body = json.loads(event.get("body", "{}"))
-        url = body.get("url")
+        pdf_urls: List[str] = body.get("pdf_urls")  # Expects a list of direct PDF URLs
 
-        if not url:
-            logger.warning("URL not provided in request body")
+        if not pdf_urls or not isinstance(pdf_urls, list):
+            logger.warning("A JSON array of 'pdf_urls' must be provided")
             return {
                 "statusCode": 400,
-                "body": json.dumps({"error": "URL not provided"}),
+                "body": json.dumps(
+                    {"error": "A JSON array of 'pdf_urls' must be provided"}
+                ),
             }
 
-        # Get metadata
-        metadata = extract_arxiv_metadata(url)
+        results = []
+        # Use a ThreadPoolExecutor to download and process PDFs in parallel
+        # Max workers set to 5, adjust based on Lambda memory/CPU and typical PDF count
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # Submitting tasks and collecting futures
+            future_to_url = {
+                executor.submit(_extract_text_from_single_pdf, url): url
+                for url in pdf_urls
+            }
+            for future in concurrent.futures.as_completed(future_to_url):
+                pdf_url = future_to_url[future]
+                try:
+                    single_result = future.result()
+                    # Add metadata if extraction was successful
+                    if single_result.get("status") == "success":
+                        metadata = extract_arxiv_metadata_from_pdf_url(pdf_url)
+                        results.append({**metadata, **single_result})
+                    else:
+                        results.append(single_result)  # Append error object directly
+                except Exception as e:
+                    logger.exception(f"Error getting result for {pdf_url}")
+                    results.append(
+                        {
+                            "status": "error",
+                            "pdf_url": pdf_url,
+                            "error_message": f"Execution error: {str(e)}",
+                        }
+                    )
 
-        # Extract PDF content
-        content = extract_text_from_pdf(metadata["pdf_url"])
+        return {"statusCode": 200, "body": json.dumps(results)}
 
-        # Combine results
-        result = {**metadata, **content}
-
-        return {"statusCode": 200, "body": json.dumps(result)}
-
-    except ValueError as e:
-        logger.error(f"Invalid input: {str(e)}")
-        return {"statusCode": 400, "body": json.dumps({"error": str(e)})}
-    except PDFExtractionError as e:
-        logger.error(f"PDF extraction failed: {str(e)}")
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON in request body")
         return {
-            "statusCode": 502,
-            "body": json.dumps({"error": "PDF extraction failed", "detail": str(e)}),
+            "statusCode": 400,
+            "body": json.dumps({"error": "Invalid JSON in request body"}),
         }
     except Exception as e:
         logger.exception("Unhandled exception in lambda_handler")
@@ -132,6 +171,7 @@ def lambda_handler(event, context):
         }
 
 
+# --- Local Testing Code (Updated for batching) ---
 class DummyContext:
     """Simulate AWS Lambda context object."""
 
@@ -140,16 +180,15 @@ class DummyContext:
         self.aws_request_id = "test-request-id-12345"
 
 
-def run_test_event(url_value):
-    """Run a test event with the given URL."""
-    event = {"body": json.dumps({"url": url_value})}
+def run_test_event(urls_list):
+    """Run a test event with the given list of URLs."""
+    event = {"body": json.dumps({"pdf_urls": urls_list})}
     context = DummyContext()
 
-    print(f"=== Testing with URL: '{url_value}' ===")
+    print(f"=== Testing with URLs: '{urls_list}' ===")
     result = lambda_handler(event, context)
     print("Status Code:", result.get("statusCode"))
 
-    # Pretty-print the JSON body
     body_str = result.get("body")
     if body_str:
         try:
@@ -161,17 +200,30 @@ def run_test_event(url_value):
 
 
 if __name__ == "__main__":
-    # Run test cases
-    print("Running test cases...")
+    print("Running test cases for batch PDF extraction...")
 
-    # Test with no URL provided
+    # Test with no URLs provided
     run_test_event(None)
 
-    # Test with an empty URL string
-    run_test_event("")
+    # Test with an empty list
+    run_test_event([])
 
-    # Test with a valid arXiv URL
-    run_test_event("https://arxiv.org/abs/2310.01324")
+    # Test with a single valid arXiv PDF URL
+    run_test_event(["https://arxiv.org/pdf/2310.01324.pdf"])
 
-    # Test with an invalid URL format
-    run_test_event("https://example.com/not-an-arxiv-paper")
+    # Test with multiple valid arXiv PDF URLs
+    run_test_event(
+        [
+            "https://arxiv.org/pdf/2310.01324.pdf",
+            "https://arxiv.org/pdf/2309.04394.pdf",  # Another LLM paper
+        ]
+    )
+
+    # Test with a mix of valid and invalid URLs (e.g., non-existent PDF)
+    run_test_event(
+        [
+            "https://arxiv.org/pdf/2310.01324.pdf",
+            "https://arxiv.org/pdf/9999.99999.pdf",  # Non-existent
+            "https://arxiv.org/pdf/2309.04394.pdf",
+        ]
+    )
