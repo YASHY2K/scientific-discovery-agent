@@ -1,12 +1,19 @@
 import os
 import json
 import logging
+import time
 import requests
 import xml.etree.ElementTree as ET
 from requests.exceptions import RequestException
 
 # Initialize things outside of handler so reused across invocations
 logger = logging.getLogger()
+if not logger.handlers:
+    import sys
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 ARXIV_BASE = os.environ.get("ARXIV_BASE", "http://export.arxiv.org/api")
@@ -16,6 +23,9 @@ TIMEOUT = float(os.environ.get("HTTP_TIMEOUT_SECONDS", "5"))
 
 def search_papers(query: str):
     """Core logic to search papers from ArXiv."""
+    # Enforce rate limit
+    time.sleep(3)
+
     url = f"{ARXIV_BASE}/query"
     params = {
         "search_query": query,
@@ -43,15 +53,23 @@ def search_papers(query: str):
         # The 'summary' tag contains the abstract
         abstract = entry.find("atom:summary", ns).text.strip()
 
-        # The 'id' tag is a permalink to the paper
-        url = entry.find("atom:id", ns).text.strip()
+        # Find the PDF link, which has rel="related" and type="application/pdf"
+        pdf_url = ""
+        for link in entry.findall("atom:link", ns):
+            if link.get("rel") == "related" and link.get("type") == "application/pdf":
+                pdf_url = link.get("href")
+                break
+
+        # The 'id' tag is a permalink to the paper, use as fallback
+        if not pdf_url:
+            pdf_url = entry.find("atom:id", ns).text.strip()
 
         papers.append(
             {
                 "title": title,
                 "authors": authors,
                 "abstract": abstract,
-                "url": url,
+                "url": pdf_url,
             }
         )
     return papers

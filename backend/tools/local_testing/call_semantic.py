@@ -28,7 +28,7 @@ class DummyContext:
 def run_test_event(query_value):
     # Construct a mock event similar to API Gateway proxy event style
     event = {
-        "body": json.dumps({"query": query_value}),
+        "body": json.dumps({"query": query_value, "action": "get_references"}),
         # if needed, you can simulate other API Gateway fields, headers, etc.
     }
     context = DummyContext()

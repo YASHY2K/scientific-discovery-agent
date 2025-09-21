@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Directories
+/backend/misc
+
 # C extensions
 *.so
 .vscode/
