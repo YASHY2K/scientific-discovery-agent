@@ -1,0 +1,22 @@
+{
+  "function_configuration": {
+    "memory_mb": 1024,
+    "timeout_seconds": 120,
+    "environment_variables": {
+      "PROCESSED_BUCKET_NAME": "${PROCESSED_BUCKET_NAME}",
+      "CHUNK_SIZE": "1000",
+      "CHUNK_OVERLAP": "200",
+      "MIN_CHUNK_SIZE": "100",
+      "MAX_CHUNK_SIZE": "4000",
+      "MIN_TEXT_LENGTH": "50",
+      "SEPARATORS": "\\n\\n,\\n,. , ,",
+      "LOG_LEVEL": "INFO"
+    },
+    "description": "Text preprocessing and chunking with configurable parameters"
+  },
+  "performance_rationale": {
+    "memory": "1024MB for text processing, cleaning, and chunking operations on large documents.",
+    "timeout": "120 seconds (2 minutes) for processing and chunking large text documents.",
+    "cold_start_optimization": "LangChain text splitter and AWS clients initialized for reuse."
+  }
+}

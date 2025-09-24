@@ -1,13 +1,13 @@
+"""
+Example of refactoring an existing Lambda function to use shared utilities.
+This shows how the ArXiv search tool would look after refactoring.
+"""
+
 import time
 import requests
 import xml.etree.ElementTree as ET
 from requests.exceptions import RequestException, Timeout
 from typing import Dict, Any, List
-import sys
-import os
-
-# Add the shared utilities to the path
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "shared"))
 
 # Import shared utilities
 from lambda_utils import (
@@ -15,8 +15,6 @@ from lambda_utils import (
     RequestParser,
     ResponseFormatter,
     StandardErrorHandler,
-    PerformanceMonitor,
-    LambdaLogger,
 )
 
 # Environment configuration
@@ -24,7 +22,7 @@ REQUIRED_ENV_VARS = []  # No required vars for ArXiv search
 OPTIONAL_ENV_VARS = {
     "ARXIV_BASE": "http://export.arxiv.org/api",
     "SEARCH_LIMIT": "3",
-    "TIMEOUT": "5",
+    "HTTP_TIMEOUT_SECONDS": "5",
     "LOG_LEVEL": "INFO",
 }
 
@@ -36,7 +34,6 @@ config, logger = setup_lambda_environment(
 )
 
 
-@PerformanceMonitor.monitor_operation("arxiv_search", log_parameters=False)
 def search_papers(query: str, limit: int = None) -> List[Dict[str, Any]]:
     """
     Core logic to search papers from ArXiv.
@@ -68,7 +65,7 @@ def search_papers(query: str, limit: int = None) -> List[Dict[str, Any]]:
     logger.info(f"Searching ArXiv with query: {query}, limit: {search_limit}")
 
     # Make request with explicit timeout
-    timeout = float(config["TIMEOUT"])
+    timeout = float(config["HTTP_TIMEOUT_SECONDS"])
     resp = requests.get(url, params=params, timeout=timeout)
     resp.raise_for_status()
 
@@ -111,6 +108,7 @@ def search_papers(query: str, limit: int = None) -> List[Dict[str, Any]]:
     return papers
 
 
+@StandardErrorHandler.handle_common_exceptions
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     """
     Lambda handler for ArXiv paper search using standardized utilities.
@@ -122,95 +120,118 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     Returns:
         Standardized Lambda response
     """
+    logger.info(f"Received ArXiv search request")
+
+    # Parse and validate request
+    body = RequestParser.parse_event_body(event)
+    RequestParser.validate_required_fields(body, ["query"])
+
+    # Extract parameters
+    query = body["query"]
+    limit = body.get("limit")  # Optional parameter
+
+    # Validate limit if provided
+    if limit is not None:
+        try:
+            limit = int(limit)
+            if limit <= 0 or limit > 100:
+                raise ValueError("Limit must be between 1 and 100")
+        except (ValueError, TypeError):
+            raise ValueError("Limit must be a valid positive integer")
+
+    logger.info(f"Processing ArXiv search: query='{query}', limit={limit}")
+
+    # Execute search
     try:
-        logger.info("Received ArXiv search request")
+        results = search_papers(query, limit)
+    except Timeout:
+        logger.error(f"ArXiv API request timed out for query: {query}")
+        return ResponseFormatter.create_error_response(
+            504,
+            "Gateway Timeout",
+            "ArXiv API request timed out",
+            f"Request exceeded {config['HTTP_TIMEOUT_SECONDS']} second timeout",
+        )
+    except RequestException as e:
+        logger.error(f"ArXiv API request failed: {e}")
+        return ResponseFormatter.create_error_response(
+            502, "Bad Gateway", "ArXiv API request failed", str(e)
+        )
+
+    # Return success response with metadata
+    return ResponseFormatter.create_success_response(
+        {
+            "query": query,
+            "results": results,
+            "metadata": {
+                "count": len(results),
+                "limit": limit or int(config["SEARCH_LIMIT"]),
+                "source": "ArXiv",
+                "api_base": config["ARXIV_BASE"],
+            },
+        }
+    )
+
+
+# Alternative implementation without decorator for custom error handling
+def lambda_handler_custom_errors(event: Dict[str, Any], context) -> Dict[str, Any]:
+    """
+    Alternative handler with custom error handling logic.
+    Use this approach when you need specific error handling behavior.
+    """
+    try:
+        logger.info("Processing ArXiv search request with custom error handling")
 
         # Parse and validate request
         body = RequestParser.parse_event_body(event)
         RequestParser.validate_required_fields(body, ["query"])
 
-        # Extract parameters
         query = body["query"]
-        limit = body.get("limit")  # Optional parameter
+        limit = body.get("limit")
 
-        # Validate query
-        if not query or not query.strip():
-            raise ValueError("Query cannot be empty or whitespace only")
+        # Custom validation logic
+        if not query.strip():
+            return ResponseFormatter.create_error_response(
+                400, "Invalid Query", "Query cannot be empty or whitespace only"
+            )
 
         if len(query) > 500:
-            raise ValueError("Query must be 500 characters or less")
-
-        # Validate limit if provided
-        if limit is not None:
-            try:
-                limit = int(limit)
-                if limit <= 0 or limit > 100:
-                    raise ValueError("Limit must be between 1 and 100")
-            except (ValueError, TypeError):
-                raise ValueError("Limit must be a valid positive integer")
-
-        logger.info(f"Processing ArXiv search: query='{query}', limit={limit}")
-
-        # Execute search with performance monitoring
-        try:
-            results = search_papers(query, limit)
-
-            # Log search metrics
-            LambdaLogger.log_performance_metrics(
-                logger,
-                "arxiv_search_complete",
-                0,
-                True,
-                query_length=len(query),
-                results_count=len(results),
-                search_limit=limit or int(config["SEARCH_LIMIT"]),
-            )
-
-        except Timeout:
-            LambdaLogger.log_structured_error(
-                logger,
-                TimeoutError("ArXiv API timeout"),
-                "arxiv_search",
-                "timeout",
-                query=query,
-                timeout_seconds=config["TIMEOUT"],
-            )
             return ResponseFormatter.create_error_response(
-                504,
-                "Gateway Timeout",
-                "ArXiv API request timed out",
-                f"Request exceeded {config['TIMEOUT']} second timeout",
-            )
-        except RequestException as e:
-            LambdaLogger.log_structured_error(
-                logger,
-                e,
-                "arxiv_search",
-                "api_error",
-                query=query,
-                api_base=config["ARXIV_BASE"],
-            )
-            return ResponseFormatter.create_error_response(
-                502, "Bad Gateway", "ArXiv API request failed", str(e)
+                400, "Query Too Long", "Query must be 500 characters or less"
             )
 
-        # Return success response with metadata
+        # Execute search with custom error handling
+        results = search_papers(query, limit)
+
+        # Custom success response
         return ResponseFormatter.create_success_response(
             {
                 "query": query,
-                "results": results,
-                "metadata": {
-                    "count": len(results),
-                    "limit": limit or int(config["SEARCH_LIMIT"]),
-                    "source": "ArXiv",
-                    "api_base": config["ARXIV_BASE"],
-                },
+                "papers": results,  # Different field name
+                "total_found": len(results),
+                "search_timestamp": time.time(),
             }
         )
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
         return ResponseFormatter.create_error_response(400, "Validation Error", str(e))
+    except Timeout:
+        logger.error("ArXiv API timeout")
+        return ResponseFormatter.create_error_response(
+            504,
+            "Gateway Timeout",
+            "ArXiv search timed out",
+            "The ArXiv API did not respond within the timeout period",
+        )
+    except RequestException as e:
+        logger.error(f"ArXiv API error: {e}")
+        return ResponseFormatter.create_error_response(
+            502,
+            "External API Error",
+            "Failed to search ArXiv",
+            f"ArXiv API returned an error: {str(e)}",
+        )
     except Exception as e:
         logger.exception("Unexpected error in ArXiv search")
         return ResponseFormatter.create_error_response(

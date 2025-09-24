@@ -32,11 +32,12 @@
 The exponential growth of scientific literature presents a formidable challenge to researchers. Conducting a thorough literature review, a foundational step for any scientific endeavor, has become a months-long, labor-intensive manual effort. This bottleneck significantly impedes the pace of innovation, increases the risk of redundant work, and obscures crucial cross-disciplinary insights.
 
 Our solution, **The Autonomous Research Agent**, is designed to revolutionize this process. It's a sophisticated, collaborative multi-agent AI system built on **AWS Strands Agents SDK** and **Amazon Bedrock**. Researchers can provide a high-level query (e.g., "Summarize recent advances in mRNA vaccine stabilization techniques"), and the system will autonomously:
-* Formulate a research plan.
-* Search multiple academic databases.
-* Analyze and synthesize findings from relevant papers.
-* Critique its own analysis for completeness and accuracy.
-* Generate a comprehensive, properly cited research report, all within minutes.
+
+- Formulate a research plan.
+- Search multiple academic databases.
+- Analyze and synthesize findings from relevant papers.
+- Critique its own analysis for completeness and accuracy.
+- Generate a comprehensive, properly cited research report, all within minutes.
 
 This system aims to transform the tedious literature review into an automated, transparent, and academically rigorous workflow, accelerating scientific discovery.
 
@@ -44,36 +45,36 @@ This system aims to transform the tedious literature review into an automated, t
 
 This project addresses key requirements for autonomous research, focusing on both the research outcome and the user experience:
 
-* **Autonomous & Comprehensive Research (Req 1, 3):**
-    * Submits a query, receives a full literature review automatically.
-    * Generates structured research plans and makes reasonable assumptions for ambiguous queries.
-    * Queries multiple academic databases (arXiv, PubMed, Semantic Scholar) and analyzes full-text content.
-    * Filters irrelevant papers and identifies key methodologies, novel contributions, and comparative insights.
-* **Self-Critique & Iterative Refinement (Req 4):**
-    * Automatically critiques its own analysis for completeness and accuracy.
-    * Conducts additional research to fill identified gaps and revises analysis until quality standards are met.
-* **Verifiable & Professional Reports (Req 5):**
-    * Generates well-structured reports including executive summary, methodology review, comparative analysis, and future directions.
-    * Provides proper academic citations with links to original papers.
-    * Reports are stored in a downloadable Markdown format with metadata on the research process.
-* **Scalable, Resilient & Cost-Optimized (Req 6, 7):**
-    * Fully serverless AWS architecture, scaling automatically for concurrent research sessions.
-    * Maintains state persistence for long-running tasks, recovering from failures.
-    * Caches processed content (e.g., extracted PDF text) for faster, cost-effective reuse.
-    * Scales down to zero when idle to minimize costs.
-* **Secure & Private (Req 8):**
-    * Encrypts all data at rest and in transit.
-    * Uses secure access controls (e.g., presigned URLs) and implements authentication/authorization.
-    * Maintains session-based data isolation with automatic cache expiration.
+- **Autonomous & Comprehensive Research (Req 1, 3):**
+  - Submits a query, receives a full literature review automatically.
+  - Generates structured research plans and makes reasonable assumptions for ambiguous queries.
+  - Queries multiple academic databases (arXiv, Semantic Scholar) and analyzes full-text content.
+  - Filters irrelevant papers and identifies key methodologies, novel contributions, and comparative insights.
+- **Self-Critique & Iterative Refinement (Req 4):**
+  - Automatically critiques its own analysis for completeness and accuracy.
+  - Conducts additional research to fill identified gaps and revises analysis until quality standards are met.
+- **Verifiable & Professional Reports (Req 5):**
+  - Generates well-structured reports including executive summary, methodology review, comparative analysis, and future directions.
+  - Provides proper academic citations with links to original papers.
+  - Reports are stored in a downloadable Markdown format with metadata on the research process.
+- **Scalable, Resilient & Cost-Optimized (Req 6, 7):**
+  - Fully serverless AWS architecture, scaling automatically for concurrent research sessions.
+  - Maintains state persistence for long-running tasks, recovering from failures.
+  - Caches processed content (e.g., extracted PDF text) for faster, cost-effective reuse.
+  - Scales down to zero when idle to minimize costs.
+- **Secure & Private (Req 8):**
+  - Encrypts all data at rest and in transit.
+  - Uses secure access controls (e.g., presigned URLs) and implements authentication/authorization.
+  - Maintains session-based data isolation with automatic cache expiration.
 
 ## **3. The Glass Box: Real-time Transparency (Req 2)**
 
 A cornerstone of our design is the **"Glass Box" transparency system**. As a researcher, you'll have real-time visibility into every thought and action of the AI agents.
 
-* **Live Activity Stream:** See a timeline of all agent activities directly in the frontend.
-* **Reasoning Display:** Understand *why* an agent made a particular decision or chose a specific tool.
-* **Tool Invocation Details:** View which deterministic tools are being called, their input parameters, and their raw results.
-* **Complete Audit Trail:** A full record of the agent's workflow is preserved, building trust and enabling verification.
+- **Live Activity Stream:** See a timeline of all agent activities directly in the frontend.
+- **Reasoning Display:** Understand _why_ an agent made a particular decision or chose a specific tool.
+- **Tool Invocation Details:** View which deterministic tools are being called, their input parameters, and their raw results.
+- **Complete Audit Trail:** A full record of the agent's workflow is preserved, building trust and enabling verification.
 
 This "Glass Box" is powered by **AWS SNS** and **API Gateway WebSockets**, streaming events from the backend to the frontend.
 
@@ -88,10 +89,9 @@ graph TD
     A --> D[Paper Analyzer Agent]
     A --> E[Research Critique Agent]
     A --> F[Report Generator Agent]
-    
+
     C --> G[ArXiv Search Tool]
-    C --> H[PubMed Search Tool]
-    C --> I[Semantic Scholar Tool]
+    C --> H[Semantic Scholar Tool]
     D --> J[PDF Extractor Tool]
     D --> K[Semantic Search Tool]
     F --> L[Citation Lookup Tool]
@@ -99,18 +99,19 @@ graph TD
 
 **Key Architectural Principles:**
 
-* **Orchestrator Agent (The Research Lead):** This primary agent, powered by Claude 3.5 Sonnet, receives user queries. It acts as a project manager, dynamically delegating tasks to specialist agents, managing the overall workflow, and handling feedback loops (e.g., from the Critique Agent). It uses specialist agents as "intelligent tools" via the Strands A2A (Agent-to-Agent) protocol.
+- **Orchestrator Agent (The Research Lead):** This primary agent, powered by Claude 3.5 Sonnet, receives user queries. It acts as a project manager, dynamically delegating tasks to specialist agents, managing the overall workflow, and handling feedback loops (e.g., from the Critique Agent). It uses specialist agents as "intelligent tools" via the Strands A2A (Agent-to-Agent) protocol.
 
-* **Specialist Agents (The Experts):** Five dedicated agents, each with its own Claude 3.5 Sonnet LLM and system prompt, possess distinct domain expertise:
-    * **Research Planner Agent:** Develops the research strategy and search plan.
-    * **Paper Searcher Agent:** Executes searches across academic databases, refining queries intelligently.
-    * **Paper Analyzer Agent:** Performs deep technical analysis of paper content.
-    * **Research Critique Agent:** Acts as quality assurance, evaluating completeness and accuracy, requesting revisions.
-    * **Report Generator Agent:** Compiles findings into the final, structured report.
+- **Specialist Agents (The Experts):** Five dedicated agents, each with its own Claude 3.5 Sonnet LLM and system prompt, possess distinct domain expertise:
 
-* **Deterministic Tools (The Reliable Workers):** These are serverless AWS Lambda functions that perform specific, reliable tasks without reasoning. Agents choose when and how to invoke these tools. Examples include `arxiv_search_tool`, `pdf_text_extractor`, `semantic_search_tool`, and `citation_lookup_tool`. Each tool is a separate Lambda for isolation and independent scaling.
+  - **Research Planner Agent:** Develops the research strategy and search plan.
+  - **Paper Searcher Agent:** Executes searches across academic databases, refining queries intelligently.
+  - **Paper Analyzer Agent:** Performs deep technical analysis of paper content.
+  - **Research Critique Agent:** Acts as quality assurance, evaluating completeness and accuracy, requesting revisions.
+  - **Report Generator Agent:** Compiles findings into the final, structured report.
 
-* **Serverless Backbone:** All components—including agent runtimes, tools, storage, APIs, and messaging—are implemented using fully managed AWS serverless services (AWS Lambda, DynamoDB, S3, API Gateway, SNS, Bedrock AgentCore), ensuring maximum scalability, resilience, and cost-efficiency.
+- **Deterministic Tools (The Reliable Workers):** These are serverless AWS Lambda functions that perform specific, reliable tasks without reasoning. Agents choose when and how to invoke these tools. Examples include `arxiv_search_tool`, `pdf_text_extractor`, `semantic_search_tool`, and `citation_lookup_tool`. Each tool is a separate Lambda for isolation and independent scaling.
+
+- **Serverless Backbone:** All components—including agent runtimes, tools, storage, APIs, and messaging—are implemented using fully managed AWS serverless services (AWS Lambda, DynamoDB, S3, API Gateway, SNS, Bedrock AgentCore), ensuring maximum scalability, resilience, and cost-efficiency.
 
 ## **5. Technology Stack**
 
@@ -145,15 +146,18 @@ This section guides you (and Copilot!) through setting up the project locally fo
 ### **6.2. Backend Setup (Copilot, follow these steps!)**
 
 1. **Create Lambda Layer for Dependencies:**
+
    - **Copilot Instruction:** Navigate to the project root. Create the directory `layers/dependencies/python`.
    - **Copilot Instruction:** Install core Python dependencies into the layer: `pip install strands-agents boto3 arxiv PyPDF2 requests simplejson python-dotenv -t layers/dependencies/python`.
    - **Copilot Instruction:** Ensure `layers/dependencies/python` contains the installed packages.
 
 2. **Initialize AWS CDK:**
+
    - **Copilot Instruction:** Navigate to the `cdk` directory.
    - **Copilot Instruction:** If this is the first time using CDK in this account/region, run `cdk bootstrap aws://YOUR_AWS_ACCOUNT_ID/YOUR_AWS_REGION` (replace placeholders).
 
 3. **Synthesize CDK Templates:**
+
    - **Copilot Instruction:** From the `cdk` directory, run `cdk synth` to generate CloudFormation templates. Review the output for any errors.
 
 4. **Local Testing of Agent Logic (before full AWS deployment):**
@@ -165,12 +169,15 @@ This section guides you (and Copilot!) through setting up the project locally fo
 ### **6.3. Frontend Setup (Copilot, follow these steps!)**
 
 1. **Navigate to Frontend Directory:**
+
    - **Copilot Instruction:** `cd frontend/`
 
 2. **Install Dependencies:**
+
    - **Copilot Instruction:** `npm install`
 
 3. **Configure API Endpoints:**
+
    - **Copilot Instruction:** Create a `.env.local` file in the frontend directory.
    - **Copilot Instruction:** Once the backend is deployed (see Section 7), populate `.env.local` with the actual API Gateway URLs. For now, use placeholders: `VITE_API_REST_URL=YOUR_REST_API_GATEWAY_URL` and `VITE_API_WS_URL=YOUR_WEB_SOCKET_API_GATEWAY_URL`.
 
@@ -185,6 +192,7 @@ This section provides instructions to deploy the entire Autonomous Research Agen
 ### **7.1. Deploy Backend Infrastructure**
 
 1. **Ensure CDK Bootstrap:**
+
    - **Copilot Instruction:** Verify CDK has been bootstrapped for your account/region (see 6.2 Backend Setup step 2).
 
 2. **Deploy the Stack:**
@@ -195,6 +203,7 @@ This section provides instructions to deploy the entire Autonomous Research Agen
 ### **7.2. Deploy Frontend to S3/CloudFront**
 
 1. **Build Frontend:**
+
    - **Copilot Instruction:** Navigate to the `frontend` directory.
    - **Copilot Instruction:** Run `npm run build`.
 

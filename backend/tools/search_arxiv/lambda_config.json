@@ -1,0 +1,18 @@
+{
+  "function_configuration": {
+    "memory_mb": 256,
+    "timeout_seconds": 30,
+    "environment_variables": {
+      "ARXIV_BASE": "http://export.arxiv.org/api",
+      "SEARCH_LIMIT": "3",
+      "TIMEOUT": "5",
+      "LOG_LEVEL": "INFO"
+    },
+    "description": "ArXiv paper search - lightweight API calls with minimal memory requirements"
+  },
+  "performance_rationale": {
+    "memory": "256MB sufficient for XML parsing and HTTP requests. ArXiv responses are typically small.",
+    "timeout": "30 seconds allows for network delays and 3-second rate limiting requirement.",
+    "cold_start_optimization": "Minimal dependencies and small memory footprint for fast cold starts."
+  }
+}

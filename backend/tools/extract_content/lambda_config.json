@@ -1,0 +1,18 @@
+{
+  "function_configuration": {
+    "memory_mb": 2048,
+    "timeout_seconds": 180,
+    "environment_variables": {
+      "PROCESSED_BUCKET_NAME": "${PROCESSED_BUCKET_NAME}",
+      "TIMEOUT": "60",
+      "MAX_FILE_SIZE_MB": "100",
+      "LOG_LEVEL": "INFO"
+    },
+    "description": "PDF text extraction using PyMuPDF with memory-efficient processing"
+  },
+  "performance_rationale": {
+    "memory": "2048MB for PyMuPDF processing of large PDFs (up to 100MB) with page-by-page extraction.",
+    "timeout": "180 seconds (3 minutes) for processing complex PDFs with multiple pages and error handling.",
+    "cold_start_optimization": "PyMuPDF library loaded once, AWS clients reused across invocations."
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "function_configuration": {
+    "memory_mb": 256,
+    "timeout_seconds": 60,
+    "environment_variables": {
+      "SEMANTIC_SCHOLAR_BASE": "https://api.semanticscholar.org/graph/v1",
+      "SEARCH_LIMIT": "3",
+      "HTTP_TIMEOUT_SECONDS": "5",
+      "SECRET_NAME": "${SEMANTIC_SCHOLAR_SECRET_NAME}",
+      "LOG_LEVEL": "INFO"
+    },
+    "description": "Semantic Scholar API integration with rate limiting and retry logic"
+  },
+  "performance_rationale": {
+    "memory": "256MB sufficient for API calls and JSON processing. Semantic Scholar responses are typically small.",
+    "timeout": "60 seconds allows for multiple retry attempts with exponential backoff.",
+    "cold_start_optimization": "Minimal dependencies and AWS client reuse for fast execution."
+  }
+}

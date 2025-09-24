@@ -1,0 +1,18 @@
+{
+  "function_configuration": {
+    "memory_mb": 1024,
+    "timeout_seconds": 300,
+    "environment_variables": {
+      "RAW_BUCKET_NAME": "${RAW_BUCKET_NAME}",
+      "HTTP_TIMEOUT_SECONDS": "60",
+      "SECRET_NAME": "${SEMANTIC_SCHOLAR_SECRET_NAME}",
+      "SEMANTIC_SCHOLAR_API_KEY": ""
+    },
+    "description": "Paper acquisition with streaming download and S3 upload capabilities"
+  },
+  "performance_rationale": {
+    "memory": "1024MB for handling large PDF downloads (up to 100MB) with streaming and retry logic.",
+    "timeout": "300 seconds (5 minutes) to handle large file downloads and multiple retry attempts.",
+    "cold_start_optimization": "AWS clients initialized outside handler for reuse across invocations."
+  }
+}

@@ -5,6 +5,7 @@ __pycache__/
 
 # Directories
 /backend/misc
+.kiro
 
 # C extensions
 *.so
