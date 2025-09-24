@@ -9,7 +9,7 @@ import time
 from functools import wraps
 
 sys.path.append("/opt/python")
-from tools.shared.lambda_utils import (
+from shared.lambda_utils import (
     setup_secure_lambda_environment,
     SecureAPIKeyManager,
     RequestParser,

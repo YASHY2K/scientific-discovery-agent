@@ -10,7 +10,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "shared"))
 
 # Import shared utilities
-from lambda_utils import (
+from shared.lambda_utils import (
     setup_lambda_environment,
     RequestParser,
     ResponseFormatter,

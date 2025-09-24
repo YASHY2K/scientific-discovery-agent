@@ -7,7 +7,7 @@ from typing import Dict, Any
 import sys
 
 sys.path.append("/opt/python")
-from tools.shared.lambda_utils import (
+from shared.lambda_utils import (
     setup_lambda_environment,
     RequestParser,
     ResponseFormatter,
