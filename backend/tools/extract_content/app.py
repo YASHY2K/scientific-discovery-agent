@@ -6,7 +6,7 @@ import fitz  # PyMuPDF
 from typing import Dict, Any
 import sys
 
-sys.path.append("/opt/python")
+sys.path.append("/opt")
 from shared.lambda_utils import (
     setup_lambda_environment,
     RequestParser,
