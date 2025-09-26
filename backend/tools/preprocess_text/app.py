@@ -10,7 +10,7 @@ from typing import Dict, Any, List
 # Import shared utilities
 import sys
 
-sys.path.append("/opt/python")
+sys.path.append("/opt")
 from shared.lambda_utils import (
     setup_lambda_environment,
     RequestParser,
