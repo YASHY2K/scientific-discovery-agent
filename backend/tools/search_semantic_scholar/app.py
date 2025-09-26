@@ -32,7 +32,7 @@ OPTIONAL_ENV_VARS = {
     "SEMANTIC_SCHOLAR_BASE": "https://api.semanticscholar.org/graph/v1",
     "SEARCH_LIMIT": "3",
     "HTTP_TIMEOUT_SECONDS": "5",
-    "SECRET_NAME": "",
+    "SECRET_NAME": "SEMANTIC_SCHOLAR_API_KEY",
     "LOG_LEVEL": "INFO",
 }
 

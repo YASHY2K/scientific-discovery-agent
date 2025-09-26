@@ -24,7 +24,7 @@ from shared.lambda_utils import (
 REQUIRED_ENV_VARS = ["RAW_BUCKET_NAME"]
 OPTIONAL_ENV_VARS = {
     "HTTP_TIMEOUT_SECONDS": "60",
-    "SECRET_NAME": "",
+    "SECRET_NAME": "SEMANTIC_SCHOLAR_API_KEY",
     "SEMANTIC_SCHOLAR_API_KEY": "",
 }
 
@@ -274,7 +274,6 @@ def get_pdf_from_api(paper_id: str) -> Optional[str]:
 
     try:
         resp = requests.get(url, headers=headers, timeout=timeout)
-        print(f"printing the request: {headers} ")
         resp.raise_for_status()
         data = resp.json()
 

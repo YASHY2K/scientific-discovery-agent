@@ -29,7 +29,7 @@ class DummyContext:
 
 
 def run_test_event(query_value):
-    event = {"body": json.dumps({"pdf_url": query_value, "action": "search_paper"})}
+    event = {"body": json.dumps({"pdf_url": query_value})}
     context = DummyContext()
 
     print(f"=== Testing with query: {query_value} ===")
