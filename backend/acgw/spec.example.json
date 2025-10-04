@@ -1,0 +1,42 @@
+[
+    
+{
+    "lambdaArn": "<insert your lambda arn>",
+    "toolSchema": {
+        "inlinePayload": [
+            {
+                "name": "get_weather",
+                "description": "Get weather for a location",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "the location e.g. seattle, wa"
+                        }
+                    },
+                    "required": [
+                        "location"
+                    ]
+                }
+            },
+            {
+                "name": "get_time",
+                "description": "Get time for a timezone",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "timezone": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "timezone"
+                    ]
+                }
+            }
+        ]
+    }
+}
+
+]
