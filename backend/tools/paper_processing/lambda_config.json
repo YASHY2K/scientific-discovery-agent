@@ -1,0 +1,16 @@
+{
+  "function_configuration": {
+    "memory_mb": 256,
+    "timeout_seconds": 30,
+    "environment_variables": {
+        "STATE_MACHINE_ARN": "<state-machine-arn-here>",
+        "LOG_LEVEL": "INFO"
+    },
+    "description": "Kick off Step Functions execution with a PDF URL payload",
+    "performance_rationale": {
+        "memory": "256MB is sufficient for small JSON payload, API interactions, and logging—minimizing cost and cold start latency.",
+        "timeout": "30 seconds provides room for AWS Step Functions API latency and error handling without risking premature function termination.",
+        "cold_start_optimization": "Uses a small set of dependencies and environment variables for fast boot times. Boto3 is included by default in the AWS Lambda runtime, keeping the package lightweight."
+    }
+    }
+}
