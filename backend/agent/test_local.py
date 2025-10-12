@@ -17,7 +17,7 @@ import sys
 import os
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
-os.environ["AWS_PROFILE"] = "hackathon-friend-role"
+
 
 # Add project root to path to allow direct tool imports
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
