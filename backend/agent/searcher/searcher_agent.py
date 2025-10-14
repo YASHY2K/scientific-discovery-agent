@@ -91,7 +91,7 @@ Your final output MUST be a single, valid JSON object matching this structure ex
       "abstract": "Full abstract...",
       "source": "arxiv or semantic_scholar",
       "published_date": "2024-01-15",
-      "pdf_url": "https://arxiv.org/pdf/2401.12345.pdf",
+      "pdf_url": "[https://arxiv.org/pdf/2401.12345.pdf](https://arxiv.org/pdf/2401.12345.pdf) or [https://www.semanticscholar.org/paper/](https://www.semanticscholar.org/paper/)<rest url>",
       "relevance_score": "High",
       "selection_reason": "Directly addresses the core research question.",
       "processing_initiated": true
@@ -151,7 +151,7 @@ def get_ssm_parameters() -> dict:
         if missing_keys:
             raise KeyError(f"Missing required SSM parameters: {missing_keys}")
 
-        logger.info("✅ Configuration loaded successfully from SSM")
+        logger.info("(Success) Configuration loaded successfully from SSM")
         return config
 
     except ClientError as e:
@@ -176,7 +176,7 @@ def update_ssm_parameter(param_key: str, value: str):
             Type="SecureString",
             Overwrite=True,
         )
-        logger.info(f"✅ Parameter '{param_name}' updated successfully")
+        logger.info(f"(Success) Parameter '{param_name}' updated successfully")
     except ClientError as e:
         logger.error(f"Error updating parameter in SSM: {e}")
         raise
@@ -196,7 +196,7 @@ def get_token(client_id: str, client_secret: str, scope_string: str, url: str) -
         }
         response = requests.post(url, headers=headers, data=data)
         response.raise_for_status()
-        logger.info("✅ New token generated successfully")
+        logger.info("(Success) New token generated successfully")
         return response.json()
 
     except requests.exceptions.RequestException as err:
@@ -230,7 +230,7 @@ def initialize_searcher_agent():
     Initialize the searcher agent with MCP tools.
     This function handles all the setup including SSM config, token refresh, and MCP client.
     """
-    logger.info("🔧 Initializing Searcher Agent...")
+    logger.info("(Initializing) Initializing Searcher Agent...")
 
     # Fetch configuration from SSM
     app_config = get_ssm_parameters()
@@ -255,7 +255,7 @@ def initialize_searcher_agent():
 
     for attempt in range(max_retries):
         logger.info(
-            f"🔌 Connecting MCP Client (Attempt {attempt + 1}/{max_retries})..."
+            f"(Connection) Connecting MCP Client (Attempt {attempt + 1}/{max_retries})..."
         )
 
         mcp_client = MCPClient(
@@ -267,12 +267,12 @@ def initialize_searcher_agent():
 
         try:
             mcp_client.start()
-            logger.info("✅ MCP Client connected successfully")
+            logger.info("(Success) MCP Client connected successfully")
             break
 
         except MCPClientInitializationError as e:
             logger.error(
-                f"❌ MCP client initialization failed on attempt {attempt + 1}"
+                f"(Error) MCP client initialization failed on attempt {attempt + 1}"
             )
 
             if _is_unauthorized_error(e):
@@ -299,14 +299,14 @@ def initialize_searcher_agent():
 
     # List and log available tools
     tools = mcp_client.list_tools_sync()
-    logger.info(f"✅ Loaded {len(tools)} tools:")
+    logger.info(f"(Success) Loaded {len(tools)} tools:")
     for tool_obj in tools:
         logger.info(f"   - {tool_obj.tool_name}")
 
     # Create the agent
     agent = Agent(model=model, system_prompt=SEARCHER_SYSTEM_PROMPT, tools=tools)
 
-    logger.info("✅ Searcher Agent initialized successfully")
+    logger.info("(Success) Searcher Agent initialized successfully")
     return agent, mcp_client
 
 
@@ -317,7 +317,7 @@ mcp_client_instance = None
 try:
     searcher_agent, mcp_client_instance = initialize_searcher_agent()
 except Exception as e:
-    logger.error(f"❌ Failed to initialize searcher agent: {e}")
+    logger.error(f"(Error) Failed to initialize searcher agent: {e}")
     searcher_agent = None
     mcp_client_instance = None
 
@@ -383,7 +383,7 @@ def execute_search(query_input: str | dict, verbose: bool = True) -> str:
         Agent response as string
     """
     if searcher_agent is None:
-        error_msg = "❌ Cannot execute - agent not initialized"
+        error_msg = "(Error) Cannot execute - agent not initialized"
         if verbose:
             print(error_msg)
         return error_msg
@@ -394,7 +394,7 @@ def execute_search(query_input: str | dict, verbose: bool = True) -> str:
 
         if verbose:
             print("=" * 80)
-            print("📝 Executing search with query:")
+            print("(Query) Executing search with query:")
             print("-" * 80)
             if isinstance(query_input, dict):
                 print(f"Sub-topic ID: {query_input.get('id', 'N/A')}")
@@ -408,14 +408,14 @@ def execute_search(query_input: str | dict, verbose: bool = True) -> str:
         response = searcher_agent(formatted_query)
 
         if verbose:
-            print("\n📊 AGENT RESPONSE:")
+            print("\n(Response) AGENT RESPONSE:")
             print(response)
             print("\n")
 
         return str(response)
 
     except Exception as e:
-        error_msg = f"❌ Error: {str(e)}"
+        error_msg = f"(Error) Error: {str(e)}"
         if verbose:
             print(error_msg)
         logger.error(f"Search execution failed: {e}")
@@ -430,11 +430,11 @@ def execute_search(query_input: str | dict, verbose: bool = True) -> str:
 def run_test_mode():
     """Run the searcher agent in test mode with predefined query."""
     if searcher_agent is None:
-        print("❌ Cannot start - agent initialization failed")
+        print("(Error) Cannot start - agent initialization failed")
         return
 
     print("=" * 80)
-    print("🧪 Searcher Agent - Test Mode")
+    print("(Test Mode) Searcher Agent - Test Mode")
     print("=" * 80)
     print()
 
@@ -458,7 +458,7 @@ def run_test_mode():
         "success_criteria": "Synthesize findings from at least 15-20 key papers to provide a holistic overview",
     }
 
-    print(f"📚 Testing with sub-topic: {test_sub_topic['id']}")
+    print(f"(Info) Testing with sub-topic: {test_sub_topic['id']}")
     print()
 
     # Execute the search
@@ -468,10 +468,10 @@ def run_test_mode():
 def cleanup():
     """Clean up MCP client connection."""
     if mcp_client_instance:
-        logger.info("🔌 Shutting down MCP Client...")
+        logger.info("(Connection) Shutting down MCP Client...")
         try:
             mcp_client_instance.stop(None, None, None)
-            logger.info("✅ MCP Client shut down gracefully")
+            logger.info("(Success) MCP Client shut down gracefully")
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
 
@@ -494,15 +494,15 @@ if __name__ == "__main__":
             print("Usage: python searcher_agent.py [test]")
 
     except KeyboardInterrupt:
-        print("\n\n👋 Interrupted by user")
+        print("\n\n(Info) Interrupted by user")
 
     except Exception as e:
         logger.error(f"Fatal error: {e}")
-        print(f"\n❌ FATAL ERROR: {e}")
+        print(f"\n(Error) FATAL ERROR: {e}")
         import sys
 
         sys.exit(1)
 
     finally:
         cleanup()
-        print("\n👋 Goodbye!")
+        print("\nGoodbye!")
