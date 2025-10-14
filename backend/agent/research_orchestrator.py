@@ -3,6 +3,7 @@ from typing import Optional, List, Dict, Any
 import boto3
 from strands import Agent, tool
 from strands.models import BedrockModel
+from strands.agent.state import AgentState
 
 from utils import get_ssm_parameter
 from agent.agentcore_memory import (
@@ -12,7 +13,9 @@ from agent.agentcore_memory import (
     SESSION_ID,
 )
 from planner_agent import planner_agent, ResearchPlan
-from searcher_agent import searcher_agent, format_search_query
+from searcher.searcher_agent import searcher_agent, format_search_query
+from analyzer.analyzer_agent import analyzer_agent
+
 import json
 
 logging.getLogger("strands").setLevel(logging.DEBUG)
@@ -22,262 +25,429 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# class ResearchOrchestrator(Agent):
-#     def __init__(
-#         self,
-#         session_id: str = None,
-#         lambda_client: Optional[boto3.client] = None,
-#         use_local_tools: bool = True,
-#         log_level: int = logging.INFO,
-#         aws_region: str = "us-east-1",
-#     ):
-#         # self.session_id = session_id or f"session_{int(time.time())}"
-#         self.use_local_tools = use_local_tools
-#         self.aws_region = aws_region
-#         self.boto_session = boto3.Session(region_name=self.aws_region)
-#         self.lambda_client = lambda_client or self.boto_session.client("lambda")
-#         bedrock_client = self.boto_session.client("bedrock-runtime")
+orchestrator_prompt = """You are the Chief Research Orchestrator managing a team of specialist AI agents.
 
-#         # Initialize specialist agents first, so their tools are available
-#         self.searcher_agent = create_strands_searcher_agent(
-#             session_id=self.session_id,
-#             lambda_client=self.lambda_client,
-#             bedrock_client=bedrock_client,
-#             use_local_tools=use_local_tools,
-#         )
-#         self.analyzer_agent = create_strands_analyzer_agent(
-#             session_id=self.session_id,
-#             lambda_client=self.lambda_client,
-#             s3_client=self.boto_session.client("s3"),
-#             bedrock_client=bedrock_client,
-#             use_local_tools=use_local_tools,
-#         )
+Your role is to coordinate a comprehensive research workflow:
+1. Planner Agent: Decomposes complex queries into sub-topics
+2. Searcher Agent: Finds relevant academic papers
+3. Analyzer Agent: Performs focused analysis based on search guidance
+4. Critique Agent: Validates quality and identifies gaps
+5. Reporter Agent: Generates final comprehensive report
 
-#         super().__init__(
-#             model="openai.gpt-oss-20b-1:0",
-#             system_prompt=self._get_system_prompt(),
-#             tools=[self.search_literature, self.analyze_papers],
-#         )
+## Workflow Phases
 
-#         self.logger = logging.getLogger(f"ResearchOrchestrator-{self.session_id}")
-#         self.logger.setLevel(log_level)
-#         self.logger.info(
-#             f"Research Orchestrator initialized (session: {self.session_id})"
-#         )
+### Phase 1: Planning
+- Receive user research query
+- Call planner_agent_tool to decompose into sub-topics
+- Store plan in state
+- Report decomposition to user
 
-#     def _get_system_prompt(self) -> str:
-#         return (
-#             "You are a master research orchestrator. Your goal is to conduct research on a given topic. "
-#             "Follow these steps:\n"
-#             "1. Use your `search_literature` tool to find relevant academic papers on the user's topic.\n"
-#             "2. Once you have a list of papers, use your `analyze_papers` tool to process the top 3 most relevant ones.\n"
-#             "3. After the analysis is complete, present a final, comprehensive report to the user that includes the analysis summaries."
-#         )
+### Phase 2: Research Loop
+For each sub-topic in the plan:
+  1. Call searcher_agent_tool with sub-topic description
+  2. Call analyzer_agent_tool to analyze papers with search guidance
+  3. Store results in state
+  4. Move to next sub-topic
 
-#     @tool
-#     async def search_literature(self, query: str) -> Dict[str, Any]:
-#         """
-#         Searches academic databases for relevant papers on a given topic.
-#         :param query: The research topic or query to search for.
-#         """
-#         self.logger.info(f"Delegating literature search for query: {query}")
-#         return await self.searcher_agent.search_literature(query=query)
+### Phase 3: Quality Assurance
+- Call critique_agent_tool with all analyses
+- Check verdict
 
-#     @tool
-#     async def analyze_papers(self, papers: List[Dict[str, Any]]) -> Dict[str, Any]:
-#         """
-#         Processes a list of papers to extract and synthesize their content.
-#         :param papers: A list of paper dictionary objects to be analyzed.
-#         """
-#         self.logger.info(
-#             f"Delegating analysis of {len(papers)} papers to AnalyzerAgent."
-#         )
-#         return await self.analyzer_agent.analyze_papers(papers=papers)
+IF verdict = APPROVED:
+  - Proceed to Phase 4
 
-#     async def process_message(self, message: str, context=None) -> str:
-#         self.logger.info(
-#             f"Orchestrator received message: '{message}'. Handing off to model-driven workflow."
-#         )
-#         return await self(message, context=context)
+IF verdict = REVISE:
+  - Check revision_count < MAX_REVISION_CYCLES
+  - IF yes: Execute required revisions (search for gaps, re-analyze)
+  - IF no: Force approve
+
+### Phase 4: Report Generation
+- Call reporter_agent_tool with complete research context
+- Deliver final markdown report
+
+## State Management
+
+Maintain orchestrator state:
+- user_query: Original research question
+- research_plan: Decomposed sub-topics from planner
+- current_subtopic_index: Track progress through sub-topics
+- analyses: Store each sub-topic's analysis (by subtopic_id)
+- all_papers_by_subtopic: Store papers found (by subtopic_id)
+- revision_count: Prevent infinite loops
+- phase: Current workflow phase (planning, research, critique, reporting, complete)
+
+## Communication
+
+Keep user informed at each major step:
+- "Decomposing your research question..."
+- "Searching for papers on [sub-topic]..."
+- "Analyzing findings..."
+- "Validating research quality..."
+- "Generating final report..."
+"""
 
 
-# def create_research_orchestrator(**kwargs) -> ResearchOrchestrator:
-#     return ResearchOrchestrator(**kwargs)
+def create_orchestrator():
+    """Create orchestrator agent with state management."""
 
+    # Define initial state structure
+    initial_state = {
+        "user_query": None,
+        "research_plan": None,
+        "current_subtopic_index": 0,
+        "analyses": {},  # {subtopic_id: analysis_output}
+        "all_papers_by_subtopic": {},  # {subtopic_id: [papers_list]}
+        "revision_count": 0,
+        "phase": "init",  # init, planning, research, critique, reporting, complete
+    }
 
-orchestrator_prompt = """
-You are the Chief Research Orchestrator managing a team of specialist AI agents to conduct comprehensive scientific literature research.
-
-## Your Role
-
-You coordinate five specialist agents to fulfill user research requests:
-- PlannerAgent: Strategic research design and decomposition
-- SearcherAgent: Literature discovery and curation
-- AnalyzerAgent: Technical synthesis and insight extraction
-- CritiqueAgent: Quality assurance and validation
-- ReporterAgent: Final report generation
-
-## Decision Framework
-
-### Query Classification
-SIMPLE QUERY indicators:
-- Single focused topic (e.g., "latest CRISPR papers")
-- Specific technique or method
-- Well-defined scope
-- No comparison or multiple perspectives needed
-
-COMPLEX QUERY indicators:
-- Multiple aspects or perspectives (e.g., "technical AND ethical")
-- Requires comparison between approaches
-- Broad topic needing decomposition
-- Words like "impact", "implications", "comprehensive review"
-
-### Workflow Selection
-
-FOR SIMPLE QUERIES:
-1. Go directly to paper_searcher_tool
-2. Pass to paper_analyzer_tool
-3. Optional: research_critique_tool if quality uncertain
-4. Generate report via report_generator_tool
-
-FOR COMPLEX QUERIES:
-1. Start with research_planner_tool
-2. Execute plan: for each sub-topic:
-   a. Call paper_searcher_tool
-   b. Call paper_analyzer_tool
-3. Call research_critique_tool on all analyses
-4. Handle critique feedback (see below)
-5. Call report_generator_tool
-
-## Iteration Management
-
-### Handling Critique Feedback
-
-When CritiqueAgent returns verdict="REVISE":
-1. Review required_revisions array
-2. For each revision:
-   - If action="search_more_papers": Call paper_searcher_tool with specified query
-   - If action="re_analyze": Call paper_analyzer_tool with additional focus
-3. Increment iteration_count
-4. Call research_critique_tool again
-5. STOP after 3 iterations even if not approved (prevent infinite loops)
-
-### Handling Clarification Requests
-
-If AnalyzerAgent returns clarification_searches_needed:
-1. For each high-importance term:
-   a. Call paper_searcher_tool with focused query on that term
-   b. Provide clarification papers back to paper_analyzer_tool
-2. Continue main workflow
-
-## Communication Guidelines
-
-Always explain to the user what you're doing:
-- "I'm engaging the Planner to break down your complex query..."
-- "The Searcher is finding relevant papers on [topic]..."
-- "The Analyzer is synthesizing findings from 15 papers..."
-- "The Critique identified a gap in coverage. Searching for additional papers on [topic]..."
-
-## Error Handling
-
-If a specialist agent fails:
-- Transient errors (timeouts, rate limits): Retry once
-- No results found: Explain to user, try broader search, or continue with other sub-topics
-- Permanent errors: Note the limitation and continue workflow
-
-## Constraints
-
-- Maximum 3 critique-revision cycles per research request
-- If time is running short (Lambda timeout approaching), proceed to report with current findings
-- Always track state: which sub-topics completed, iteration count, total papers collected
-
-## Output Format
-
-Your final message should contain the complete research report in markdown format.
-Include transparent notes about any limitations encountered during research."""
-
-
-model_id = "openai.gpt-oss-20b-1:0"
-
-model = BedrockModel(model_id)
-
-memory_id = get_ssm_parameter("/app/user_research/agentcore/memory_id")
-memory_hooks = AgentCoreMemoryHook(
-    memory_id=memory_id, client=memory_client, actor_id=ACTOR_ID, session_id=SESSION_ID
-)
-
-
-@tool
-def searcher_agent_tool(query: str) -> str:
-    """
-    Searches academic databases for relevant papers on a given topic.
-
-    This tool queries multiple sources (arXiv, Semantic Scholar) to find relevant
-    academic papers. It returns paper metadata including titles, abstracts, authors,
-    and PDF URLs, and automatically initiates processing for selected papers.
-
-    The tool accepts either:
-    - Simple string: "CRISPR gene editing applications"
-    - Structured JSON with sub-topic information (from planner agent)
-
-    Args:
-        query: The research topic or query to search for. Can be a simple topic
-               string or a JSON string containing structured sub-topic information
-               with description, keywords, and search guidance.
-
-    Returns:
-        JSON string containing search results with paper metadata, relevance scores,
-        processing status, and search strategy explanation.
-    """
-    if searcher_agent is None:
-        return "❌ Searcher agent not initialized"
+    research_state = AgentState(initial_state=initial_state)
+    model = BedrockModel(model_id="us.anthropic.claude-3-5-sonnet-20241022-v1:0")
 
     try:
-        logger.info(f"🔍 Executing paper search")
-
-        # Try to parse as JSON first (structured sub-topic)
-        try:
-            sub_topic = json.loads(query)
-            formatted_query = format_search_query(sub_topic, include_directives=True)
-        except (json.JSONDecodeError, TypeError):
-            # It's a simple string query
-            formatted_query = format_search_query(query, include_directives=True)
-
-        # Execute the search
-        response = searcher_agent(formatted_query)
-        return str(response)
-
+        memory_id = get_ssm_parameter("/app/user_research/agentcore/memory_id")
+        memory_hooks = AgentCoreMemoryHook(
+            memory_id=memory_id,
+            client=memory_client,
+            actor_id=ACTOR_ID,
+            session_id=SESSION_ID,
+        )
+        hooks = [memory_hooks]
     except Exception as e:
-        logger.error(f"Error during literature search: {e}")
-        return f"❌ Error during literature search: {str(e)}"
+        logger.warning(f"Could not load AgentCore memory hooks: {e}")
+        hooks = None
+
+    orchestrator = Agent(
+        model=model,
+        system_prompt=orchestrator_prompt,
+        state=research_state,
+        agent_id="research-orchestrator",
+        hooks=hooks,
+    )
+
+    return orchestrator
+
+
+orchestrator_agent = create_orchestrator()
 
 
 @tool
 def planner_agent_tool(query: str) -> str:
     """
-    Plans the research approach and decomposes complex queries into sub-topics.
+    Decompose a complex research query into manageable sub-topics.
+
+    This tool calls the Planner Agent to:
+    - Analyze query complexity
+    - Determine research approach
+    - Decompose into sub-topics with search guidance
 
     Args:
-        query: The complex research question to plan for.
+        query: The research question to decompose
 
     Returns:
-        A structured research plan with sub-topics and search strategies.
+        JSON string containing the research plan with sub-topics and search guidance
     """
     try:
-        logger.info(f"Planning research for query: {query}")
-        response = planner_agent.structured_output(
-            output_model=ResearchPlan, prompt=query
+        logger.info(f"Planner: Decomposing query: {query}")
+
+        # Call planner agent
+        plan = planner_agent.structured_output(output_model=ResearchPlan, prompt=query)
+
+        plan_dict = plan.model_dump()
+
+        # Update orchestrator state
+        state = orchestrator_agent.state.get()
+        state["user_query"] = query
+        state["research_plan"] = plan_dict
+        state["current_subtopic_index"] = 0
+        state["phase"] = "research"
+        orchestrator_agent.state.set("user_query", query)
+        orchestrator_agent.state.set("research_plan", plan_dict)
+        orchestrator_agent.state.set("phase", "research")
+
+        logger.info(
+            f"Planner: Research plan created with {len(plan_dict['sub_topics'])} sub-topics"
         )
-        # Convert to dict for better serialization
-        return response.model_dump_json(indent=2)
+
+        return json.dumps(plan_dict, indent=2)
+
     except Exception as e:
-        logger.error(f"Error during research planning: {e}")
-        return f"❌ Error during research planning: {str(e)}"
+        logger.error(f"Planner error: {e}")
+        return json.dumps({"error": str(e), "status": "failed"})
 
 
-orchestrator_agent = Agent(
-    model=model,
-    tools=[searcher_agent_tool, planner_agent_tool],
-    system_prompt=orchestrator_prompt,
-    hooks=[memory_hooks],
-)
+def extract_arxiv_id_from_url(pdf_url: str) -> Optional[str]:
+    """Extract arXiv ID from PDF URL."""
+    if not pdf_url or "arxiv.org/pdf/" not in pdf_url:
+        return None
+    try:
+        filename = pdf_url.split("/")[-1]
+        arxiv_id = filename.replace(".pdf", "")
+        return arxiv_id
+    except Exception as e:
+        logger.warning(f"Failed to extract arXiv ID from URL: {e}")
+        return None
+
+
+def enrich_papers_with_s3_paths(papers: List[Dict]) -> List[Dict]:
+    """Add S3 paths to papers based on their arXiv IDs."""
+    enriched_papers = []
+
+    for paper in papers:
+        paper_copy = paper.copy()
+        pdf_url = paper.get("pdf_url", "")
+        arxiv_id = extract_arxiv_id_from_url(pdf_url)
+
+        if arxiv_id:
+            paper_copy["arxiv_id"] = arxiv_id
+            paper_copy["s3_text_path"] = (
+                f"s3://ai-agent-hackathon-processed-pdf-files/{arxiv_id}/full_text.txt"
+            )
+            paper_copy["s3_chunks_path"] = (
+                f"s3://ai-agent-hackathon-processed-pdf-files/{arxiv_id}/chunks.json"
+            )
+            logger.info(f"Enriched paper with S3 path: {paper_copy['s3_text_path']}")
+        else:
+            paper_copy["arxiv_id"] = None
+            paper_copy["s3_text_path"] = None
+            paper_copy["s3_chunks_path"] = None
+            logger.warning(f"Could not extract arXiv ID for: {paper.get('title')}")
+
+        enriched_papers.append(paper_copy)
+
+    return enriched_papers
+
+
+@tool
+def searcher_agent_tool(subtopic_description: str) -> str:
+    """
+    Search for papers related to a specific research sub-topic.
+
+    This tool:
+    - Calls the Searcher Agent to find papers
+    - Enriches results with S3 paths for processed papers
+    - Stores results in orchestrator state
+
+    Args:
+        subtopic_description: Description of the sub-topic to search for
+
+    Returns:
+        JSON string with search results including S3 paths
+    """
+    try:
+        state = orchestrator_agent.state.get()
+        plan = state.get("research_plan")
+        current_index = state.get("current_subtopic_index", 0)
+
+        if not plan or current_index >= len(plan["sub_topics"]):
+            logger.error("Invalid research state for searcher")
+            return json.dumps({"error": "Invalid research state", "status": "failed"})
+
+        current_subtopic = plan["sub_topics"][current_index]
+        subtopic_id = current_subtopic["id"]
+
+        logger.info(f"Searcher: Searching for '{subtopic_id}'")
+
+        # Format query with search guidance
+        search_input = {
+            "description": subtopic_description,
+            "keywords": current_subtopic.get("suggested_keywords", []),
+            "search_guidance": current_subtopic.get("search_guidance", {}),
+        }
+
+        formatted_query = format_search_query(search_input, include_directives=True)
+
+        # Call searcher agent
+        search_result = searcher_agent(formatted_query)
+
+        # Parse and enrich with S3 paths
+        try:
+            search_data = json.loads(str(search_result))
+
+            if "selected_papers" in search_data:
+                enriched_papers = enrich_papers_with_s3_paths(
+                    search_data["selected_papers"]
+                )
+                search_data["selected_papers"] = enriched_papers
+
+                # Store papers in state
+                all_papers = state.get("all_papers_by_subtopic", {})
+                all_papers[subtopic_id] = enriched_papers
+                orchestrator_agent.state.set("all_papers_by_subtopic", all_papers)
+
+                logger.info(
+                    f"Searcher: Found {len(enriched_papers)} papers for '{subtopic_id}'"
+                )
+
+            return json.dumps(search_data, indent=2)
+
+        except json.JSONDecodeError:
+            logger.warning("Searcher: Could not parse output as JSON")
+            return str(search_result)
+
+    except Exception as e:
+        logger.error(f"Searcher error: {e}")
+        return json.dumps({"error": str(e), "status": "failed"})
+
+
+@tool
+def analyzer_agent_tool() -> str:
+    """
+    Analyze papers for the current sub-topic using search guidance.
+
+    This tool:
+    - Reads papers from state
+    - Applies search guidance for focused analysis
+    - Calls Analyzer Agent with context
+    - Stores analysis in state
+
+    Returns:
+        JSON string with focused analysis
+    """
+    try:
+        state = orchestrator_agent.state.get()
+        plan = state.get("research_plan")
+        # NOTE: The index is not incremented here, so we get the current one
+        current_index = state.get("current_subtopic_index", 0)
+        all_papers = state.get("all_papers_by_subtopic", {})
+
+        if not plan or current_index >= len(plan["sub_topics"]):
+            logger.error("Invalid research state for analyzer")
+            return json.dumps({"error": "Invalid research state", "status": "failed"})
+
+        current_subtopic = plan["sub_topics"][current_index]
+        subtopic_id = current_subtopic["id"]
+        papers = all_papers.get(subtopic_id, [])
+
+        if not papers:
+            logger.warning(f"Analyzer: No papers found for '{subtopic_id}' to analyze.")
+            # Move to the next sub-topic even if no papers were found to avoid getting stuck
+            orchestrator_agent.state.set("current_subtopic_index", current_index + 1)
+            return json.dumps(
+                {"error": f"No papers found for {subtopic_id}", "status": "skipped"}
+            )
+
+        logger.info(f"Analyzer: Analyzing {len(papers)} papers for '{subtopic_id}'")
+
+        # Create analysis prompt with search guidance and paper content
+        analysis_prompt = f"""Analyze the following papers for this research sub-topic.
+
+Sub-Topic ID: {subtopic_id}
+Description: {current_subtopic["description"]}
+Success Criteria: {current_subtopic.get("success_criteria", "N/A")}
+
+Search Guidance (IMPORTANT - focus your analysis on these criteria):
+- Focus on: {current_subtopic.get("search_guidance", {}).get("focus_on", "N/A")}
+- Must include: {current_subtopic.get("search_guidance", {}).get("must_include", "N/A")}
+- Avoid: {current_subtopic.get("search_guidance", {}).get("avoid", "N/A")}
+
+Papers to analyze:
+{json.dumps(papers, indent=2)}
+
+INSTRUCTIONS:
+1. For each paper, read its content from the S3 path (s3_text_path field).
+2. Extract ONLY findings relevant to the search guidance criteria.
+3. Map findings to specific criteria (focus_on fields).
+4. Identify contradictions within this sub-topic.
+5. Find research gaps specific to this sub-topic.
+6. Note any unfamiliar terms requiring clarification.
+7. Return structured JSON analysis.
+
+Return the analysis in the specified structured format.
+"""
+
+        # Call analyzer agent
+        analysis = analyzer_agent(analysis_prompt)
+
+        # Parse and store analysis
+        try:
+            analysis_data = json.loads(str(analysis))
+        except json.JSONDecodeError:
+            logger.warning(
+                "Analyzer: Could not parse output as JSON, storing as raw text."
+            )
+            analysis_data = {"raw_analysis": str(analysis), "parse_error": True}
+
+        # Store in state
+        analyses = state.get("analyses", {})
+        analyses[subtopic_id] = analysis_data
+        orchestrator_agent.state.set("analyses", analyses)
+
+        # Move to next sub-topic for the next iteration of the loop
+        orchestrator_agent.state.set("current_subtopic_index", current_index + 1)
+
+        logger.info(f"Analyzer: Analysis complete for '{subtopic_id}'")
+
+        return json.dumps(analysis_data, indent=2)
+
+    except Exception as e:
+        logger.error(f"Analyzer error: {e}")
+        return json.dumps({"error": str(e), "status": "failed"})
+
+
+def run_research_workflow(user_query: str) -> str:
+    """
+    Execute complete research workflow for a user query.
+
+    This is the main entry point that:
+    1. Plans the research
+    2. Executes search and analysis for each sub-topic
+    3. Validates quality
+    4. Generates final report
+
+    Args:
+        user_query: The research question
+
+    Returns:
+        Markdown string with final research report
+    """
+    logger.info(f"Starting research workflow: {user_query}")
+
+    # Reset state for new workflow
+    orchestrator_agent.state.set("user_query", None)
+    orchestrator_agent.state.set("research_plan", None)
+    orchestrator_agent.state.set("current_subtopic_index", 0)
+    orchestrator_agent.state.set("analyses", {})
+    orchestrator_agent.state.set("all_papers_by_subtopic", {})
+    orchestrator_agent.state.set("revision_count", 0)
+    orchestrator_agent.state.set("phase", "init")
+
+    # Phase 1: Planning
+    logger.info("Phase 1: Planning")
+    orchestrator_agent(f"Please plan the research for: {user_query}")
+
+    # Phase 2: Research loop
+    logger.info("Phase 2: Research")
+    state = orchestrator_agent.state.get()
+    plan = state.get("research_plan")
+
+    if plan:
+        for i, subtopic in enumerate(plan["sub_topics"]):
+            logger.info(
+                f"Processing sub-topic {i + 1}/{len(plan['sub_topics'])}: {subtopic['id']}"
+            )
+            orchestrator_agent(
+                f"Search and analyze papers for: {subtopic['description']}"
+            )
+
+    # Phase 3: Critique (placeholder)
+    logger.info("Phase 3: Quality Assurance")
+    orchestrator_agent("Validate the research quality")
+
+    # Phase 4: Report
+    logger.info("Phase 4: Reporting")
+    result = orchestrator_agent("Generate the final research report")
+
+    logger.info("Research workflow complete")
+    return str(result)
+
+
+# ============================================================================
+# MODULE-LEVEL EXECUTION
+# ============================================================================
+
+if __name__ == "__main__":
+    # Example usage
+    sample_query = "Impact of transformer models on time-series forecasting"
+    report = run_research_workflow(sample_query)
+    print(report)
