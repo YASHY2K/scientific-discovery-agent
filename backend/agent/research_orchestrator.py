@@ -1,4 +1,5 @@
 import logging
+import requests
 from typing import Optional, List, Dict, Any
 import boto3
 from strands import Agent, tool
@@ -176,17 +177,72 @@ def planner_agent_tool(query: str) -> str:
         return json.dumps({"error": str(e), "status": "failed"})
 
 
-def extract_arxiv_id_from_url(pdf_url: str) -> Optional[str]:
-    """Extract arXiv ID from PDF URL."""
-    if not pdf_url or "arxiv.org/pdf/" not in pdf_url:
-        return None
+def get_api_key(secret_name: str, region_name: str = "us-east-1"):
+    """
+    Retrieves a secret from AWS Secrets Manager.
+
+    Args:
+        secret_name: The name of the secret to retrieve.
+        region_name: The AWS region where the secret is stored.
+
+    Returns:
+        The secret string if successful, otherwise None.
+    """
+    # Create a Secrets Manager client
+    session = boto3.session.Session()
+    client = session.client(service_name="secretsmanager", region_name=region_name)
+
     try:
-        filename = pdf_url.split("/")[-1]
-        arxiv_id = filename.replace(".pdf", "")
-        return arxiv_id
-    except Exception as e:
-        logger.warning(f"Failed to extract arXiv ID from URL: {e}")
+        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+    except ClientError as e:
+        # For a list of exceptions thrown, see
+        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
+        print(f"Error retrieving secret: {e}")
         return None
+    else:
+        # Decrypts secret using the associated KMS key.
+        # Depending on whether the secret is a string or binary, one of these fields will be populated.
+        if "SecretString" in get_secret_value_response:
+            secret = get_secret_value_response["SecretString"]
+            return secret
+        # In this example, we only handle string secrets.
+        # You could add handling for binary secrets if needed.
+
+    return None
+
+
+def process_id(paper_id: str) -> str:
+    """
+    Example:
+        1. arxiv:1910.04751v3 -> parts = ["arxiv", "1910.04751v3"]
+            return parts[1]
+        2. "s2:4a12695287ab959bbb65cb551d478ccacb33079a" -> ['s2', '4a12695287ab959bbb65cb551d478ccacb33079a']
+            > convert parts[1] -> to arxiv id and return
+    """
+    parts = paper_id.split(":")
+    if parts[0] == "arxiv":
+        return parts[1]
+    elif parts[0] == "s2":
+        url = f"https://api.semanticscholar.org/graph/v1/paper/{parts[1]}?fields=url,externalIds"
+        headers = {}
+        API_KEY = get_api_key("SEMANTIC_SCHOLAR_API_KEY")
+        if API_KEY:
+            headers["x-api-key"] = API_KEY
+        try:
+            response = request.get(url, headers=headers, timeout="60")
+            response.raise_for_status()
+            data = response.json()
+            external_ids = data.get("externalIds", {})
+            if "ArXiv" in external_ids:
+                arxiv_id = external_ids["ArXiv"]
+                logger.info(f"Found PDF, paper ID: {arxiv_id}")
+            return arxiv_id
+        except:
+            logger.warning(f"No ArXiv ID found for paper {paper_id}")
+            return ""
+    else:
+        # invalid id
+        return ""
 
 
 def enrich_papers_with_s3_paths(papers: List[Dict]) -> List[Dict]:
@@ -195,11 +251,12 @@ def enrich_papers_with_s3_paths(papers: List[Dict]) -> List[Dict]:
 
     for paper in papers:
         paper_copy = paper.copy()
+        paper_id = paper.get("id", "")
         pdf_url = paper.get("pdf_url", "")
-        arxiv_id = extract_arxiv_id_from_url(pdf_url)
 
-        if arxiv_id:
-            paper_copy["arxiv_id"] = arxiv_id
+        if paper_id:
+            arxiv_id = process_id(paper_id)
+            paper_copy["id"] = arxiv_id
             paper_copy["s3_text_path"] = (
                 f"s3://ai-agent-hackathon-processed-pdf-files/{arxiv_id}/full_text.txt"
             )
@@ -208,7 +265,7 @@ def enrich_papers_with_s3_paths(papers: List[Dict]) -> List[Dict]:
             )
             logger.info(f"Enriched paper with S3 path: {paper_copy['s3_text_path']}")
         else:
-            paper_copy["arxiv_id"] = None
+            paper_copy["id"] = None
             paper_copy["s3_text_path"] = None
             paper_copy["s3_chunks_path"] = None
             logger.warning(f"Could not extract arXiv ID for: {paper.get('title')}")
