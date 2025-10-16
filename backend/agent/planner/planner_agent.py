@@ -1,7 +1,6 @@
 from strands import Agent
 from strands.models import BedrockModel
-from planner_models import ResearchPlan
-
+from planner.planner_models import ResearchPlan
 
 Planner_Agent_prompt = """
         You are a Research Planning Specialist.
@@ -26,22 +25,52 @@ Planner_Agent_prompt = """
         
 """
 
-model_id = "openai.gpt-oss-120b-1:0"
-
+model_id = "us.anthropic.claude-3-5-sonnet-20240620-v1:0"  # Corrected Model ID
 model = BedrockModel(model_id=model_id)
-
 
 planner_agent = Agent(
     model=model,
     system_prompt=Planner_Agent_prompt,
 )
 
-if __name__ == "__main__":
+
+# --- NEW: STRUCTURED EXECUTION FUNCTION ---
+def execute_planning(query: str) -> ResearchPlan:
+    """
+    Builds a structured prompt and executes the planning agent.
+
+    Args:
+        query: The raw user research query.
+
+    Returns:
+        A structured ResearchPlan object.
+    """
+    # You can add more context to the prompt if needed in the future
+    structured_prompt = f"""Please create a comprehensive research plan for the following query.
+Analyze its complexity, determine the best approach, and decompose it into independent sub-topics with clear search guidance.
+
+USER QUERY: "{query}"
+"""
+
+    print("📝 Calling Planner Agent with structured prompt...")
+
+    # Call the agent with the structured prompt
     plan = planner_agent.structured_output(
-        output_model=ResearchPlan,
-        prompt="Compare reinforcement learning and supervised learning for robotics control",
+        output_model=ResearchPlan, prompt=structured_prompt
     )
-    print(f"Approach: {plan.research_approach}")
+
+    return plan
+
+
+if __name__ == "__main__":
+    # Now the main block calls the new execution function
+    user_query = (
+        "Compare reinforcement learning and supervised learning for robotics control"
+    )
+
+    plan = execute_planning(user_query)
+
+    print(f"\nApproach: {plan.research_approach}")
     print(f"Sub-topics: {len(plan.sub_topics)}\n")
 
     for st in plan.sub_topics:

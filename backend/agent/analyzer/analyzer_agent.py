@@ -16,6 +16,9 @@ from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 from strands.types.exceptions import MCPClientInitializationError
 from mcp.client.streamable_http import streamablehttp_client
+from analyzer.analyzer_models import AnalysisResponse
+
+
 import httpx
 import requests
 
@@ -464,15 +467,20 @@ def execute_analysis(
             print("=" * 80)
             print()
 
-        # Execute the analysis
         response = analyzer_agent(formatted_query)
 
+        # Execute the analysis
+        structured_response = analyzer_agent.structured_output(
+            output_model=AnalysisResponse,
+            prompt="Extract structured data from response",
+        )
+
         if verbose:
-            print("\n(Response) AGENT RESPONSE:")
-            print(response)
+            print("\n(Response) STRUCTURED AGENT RESPONSE:")
+            print(structured_response.model_dump())
             print("\n")
 
-        return str(response)
+        return str(structured_response)
 
     except Exception as e:
         error_msg = f"(Error) Error: {str(e)}"

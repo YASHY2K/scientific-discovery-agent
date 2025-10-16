@@ -1,3 +1,4 @@
+from datetime import datetime
 import logging
 import requests
 from typing import Optional, List, Dict, Any
@@ -7,24 +8,61 @@ from strands.models import BedrockModel
 from strands.agent.state import AgentState
 
 from utils import get_ssm_parameter
-from agent.agentcore_memory import (
+from agentcore_memory import (
     AgentCoreMemoryHook,
     memory_client,
     ACTOR_ID,
     SESSION_ID,
 )
-from planner_agent import planner_agent, ResearchPlan
-from searcher.searcher_agent import searcher_agent, format_search_query
-from analyzer.analyzer_agent import analyzer_agent
+from planner.planner_agent import planner_agent, ResearchPlan, execute_planning
+from searcher.searcher_agent import execute_search, searcher_agent, format_search_query
+from analyzer.analyzer_agent import analyzer_agent, execute_analysis
+from botocore.exceptions import ClientError
 
 import json
 
-logging.getLogger("strands").setLevel(logging.DEBUG)
-logging.basicConfig(
-    format="%(levelname)s | %(name)s | %(message)s", handlers=[logging.StreamHandler()]
-)
+
+def setup_logging():
+    """Configure logging to output to both file and console"""
+    # Create formatters for file and console
+    file_formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    console_formatter = logging.Formatter("%(levelname)s | %(name)s | %(message)s")
+
+    # Create and configure file handler in local logs directory
+    import os
+    logs_dir = os.path.join(os.getcwd(), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    log_path = os.path.join(logs_dir, "output.log")
+    try:
+        file_handler = logging.FileHandler(log_path, mode="w")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(file_formatter)
+        print(f"Log file will be saved to: {log_path}")
+    except Exception as e:
+        print(f"Warning: Could not create log file: {e}")
+        file_handler = None
+
+    # Create and configure console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(console_formatter)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+    # Set Strands logger level
+    logging.getLogger("strands").setLevel(logging.DEBUG)
+
 
 logger = logging.getLogger(__name__)
+setup_logging()
 
 orchestrator_prompt = """You are the Chief Research Orchestrator managing a team of specialist AI agents.
 
@@ -137,7 +175,7 @@ def planner_agent_tool(query: str) -> str:
     """
     Decompose a complex research query into manageable sub-topics.
 
-    This tool calls the Planner Agent to:
+    This tool calls the Planner Agent using a structured execution function to:
     - Analyze query complexity
     - Determine research approach
     - Decompose into sub-topics with search guidance
@@ -151,19 +189,17 @@ def planner_agent_tool(query: str) -> str:
     try:
         logger.info(f"Planner: Decomposing query: {query}")
 
-        # Call planner agent
-        plan = planner_agent.structured_output(output_model=ResearchPlan, prompt=query)
+        # --- CORRECTED LOGIC ---
+        # Call the new structured execution function instead of the raw agent
+        plan = execute_planning(query)
+        # --- END CORRECTION ---
 
         plan_dict = plan.model_dump()
 
         # Update orchestrator state
-        state = orchestrator_agent.state.get()
-        state["user_query"] = query
-        state["research_plan"] = plan_dict
-        state["current_subtopic_index"] = 0
-        state["phase"] = "research"
         orchestrator_agent.state.set("user_query", query)
         orchestrator_agent.state.set("research_plan", plan_dict)
+        orchestrator_agent.state.set("current_subtopic_index", 0)
         orchestrator_agent.state.set("phase", "research")
 
         logger.info(
@@ -229,7 +265,7 @@ def process_id(paper_id: str) -> str:
         if API_KEY:
             headers["x-api-key"] = API_KEY
         try:
-            response = request.get(url, headers=headers, timeout="60")
+            response = requests.get(url, headers=headers, timeout="60")
             response.raise_for_status()
             data = response.json()
             external_ids = data.get("externalIds", {})
@@ -305,17 +341,15 @@ def searcher_agent_tool(subtopic_description: str) -> str:
 
         logger.info(f"Searcher: Searching for '{subtopic_id}'")
 
-        # Format query with search guidance
         search_input = {
+            "id": subtopic_id,
             "description": subtopic_description,
-            "keywords": current_subtopic.get("suggested_keywords", []),
+            "suggested_keywords": current_subtopic.get("suggested_keywords", []),
             "search_guidance": current_subtopic.get("search_guidance", {}),
         }
 
-        formatted_query = format_search_query(search_input, include_directives=True)
-
         # Call searcher agent
-        search_result = searcher_agent(formatted_query)
+        search_result = execute_search(search_input, verbose=False)
 
         # Parse and enrich with S3 paths
         try:
@@ -364,7 +398,6 @@ def analyzer_agent_tool() -> str:
     try:
         state = orchestrator_agent.state.get()
         plan = state.get("research_plan")
-        # NOTE: The index is not incremented here, so we get the current one
         current_index = state.get("current_subtopic_index", 0)
         all_papers = state.get("all_papers_by_subtopic", {})
 
@@ -378,7 +411,6 @@ def analyzer_agent_tool() -> str:
 
         if not papers:
             logger.warning(f"Analyzer: No papers found for '{subtopic_id}' to analyze.")
-            # Move to the next sub-topic even if no papers were found to avoid getting stuck
             orchestrator_agent.state.set("current_subtopic_index", current_index + 1)
             return json.dumps(
                 {"error": f"No papers found for {subtopic_id}", "status": "skipped"}
@@ -386,9 +418,20 @@ def analyzer_agent_tool() -> str:
 
         logger.info(f"Analyzer: Analyzing {len(papers)} papers for '{subtopic_id}'")
 
-        # Create analysis prompt with search guidance and paper content
-        analysis_prompt = f"""Analyze the following papers for this research sub-topic.
+        # Extract S3 URIs from papers
+        paper_uris = [
+            paper.get("s3_text_path") for paper in papers if paper.get("s3_text_path")
+        ]
 
+        if not paper_uris:
+            logger.warning(f"Analyzer: No valid S3 paths found for '{subtopic_id}'")
+            orchestrator_agent.state.set("current_subtopic_index", current_index + 1)
+            return json.dumps(
+                {"error": f"No valid S3 paths for {subtopic_id}", "status": "skipped"}
+            )
+
+        # Build analysis context from search guidance
+        context = f"""
 Sub-Topic ID: {subtopic_id}
 Description: {current_subtopic["description"]}
 Success Criteria: {current_subtopic.get("success_criteria", "N/A")}
@@ -398,43 +441,38 @@ Search Guidance (IMPORTANT - focus your analysis on these criteria):
 - Must include: {current_subtopic.get("search_guidance", {}).get("must_include", "N/A")}
 - Avoid: {current_subtopic.get("search_guidance", {}).get("avoid", "N/A")}
 
-Papers to analyze:
-{json.dumps(papers, indent=2)}
-
 INSTRUCTIONS:
-1. For each paper, read its content from the S3 path (s3_text_path field).
+1. For each paper, read its content from the S3 path.
 2. Extract ONLY findings relevant to the search guidance criteria.
 3. Map findings to specific criteria (focus_on fields).
 4. Identify contradictions within this sub-topic.
 5. Find research gaps specific to this sub-topic.
 6. Note any unfamiliar terms requiring clarification.
-7. Return structured JSON analysis.
-
-Return the analysis in the specified structured format.
 """
 
-        # Call analyzer agent
-        analysis = analyzer_agent(analysis_prompt)
+        # ✅ USE execute_analysis - handles everything internally
+        analysis_result_str = execute_analysis(
+            paper_uris=paper_uris, context=context, verbose=False
+        )
 
-        # Parse and store analysis
+        # Parse the result
         try:
-            analysis_data = json.loads(str(analysis))
+            analysis_data = json.loads(analysis_result_str)
         except json.JSONDecodeError:
             logger.warning(
                 "Analyzer: Could not parse output as JSON, storing as raw text."
             )
-            analysis_data = {"raw_analysis": str(analysis), "parse_error": True}
+            analysis_data = {"raw_analysis": analysis_result_str, "parse_error": True}
 
         # Store in state
         analyses = state.get("analyses", {})
         analyses[subtopic_id] = analysis_data
         orchestrator_agent.state.set("analyses", analyses)
 
-        # Move to next sub-topic for the next iteration of the loop
+        # Move to next sub-topic
         orchestrator_agent.state.set("current_subtopic_index", current_index + 1)
 
         logger.info(f"Analyzer: Analysis complete for '{subtopic_id}'")
-
         return json.dumps(analysis_data, indent=2)
 
     except Exception as e:
@@ -499,12 +537,63 @@ def run_research_workflow(user_query: str) -> str:
     return str(result)
 
 
-# ============================================================================
-# MODULE-LEVEL EXECUTION
-# ============================================================================
+def main():
+    """Main test execution - Testing Planner Agent"""
+    print("\n=== Starting Planner Agent Test ===")
+    print("Logs will be saved to output.log")
+
+    # Reset state for clean test
+    orchestrator_agent.state.set("user_query", None)
+    orchestrator_agent.state.set("research_plan", None)
+    orchestrator_agent.state.set("current_subtopic_index", 0)
+    orchestrator_agent.state.set("analyses", {})
+    orchestrator_agent.state.set("all_papers_by_subtopic", {})
+    orchestrator_agent.state.set("revision_count", 0)
+    orchestrator_agent.state.set("phase", "init")
+
+    # Test query
+    user_query = (
+        "Compare reinforcement learning and supervised learning for robotics control"
+    )
+    print(f"\nTest Query: {user_query}")
+
+    try:
+        # Call planner directly
+        print("\nCalling Planner Agent...")
+        plan_result = planner_agent_tool(user_query)
+
+        # Parse and display plan
+        try:
+            plan_data = json.loads(plan_result)
+            print("\nResearch Plan Details:")
+            print(f"Complexity: {plan_data.get('complexity', 'Not specified')}")
+            print(f"Approach: {plan_data.get('approach', 'Not specified')}")
+            print("\nSub-topics:")
+            for topic in plan_data.get("sub_topics", []):
+                print(f"\n- Topic ID: {topic.get('id')}")
+                print(f"  Description: {topic.get('description')}")
+                print(f"  Keywords: {', '.join(topic.get('suggested_keywords', []))}")
+                print("  Search Guidance:")
+                guidance = topic.get("search_guidance", {})
+                print(f"    Focus on: {guidance.get('focus_on', 'Not specified')}")
+                print(
+                    f"    Must include: {guidance.get('must_include', 'Not specified')}"
+                )
+                print(f"    Avoid: {guidance.get('avoid', 'Not specified')}")
+        except json.JSONDecodeError:
+            print("\nWarning: Could not parse plan as JSON")
+            print("Raw plan output:", plan_result)
+
+        # Verify state updates
+        state = orchestrator_agent.state.get()
+        print("\nState Verification:")
+        print(f"User Query Set: {state.get('user_query') == user_query}")
+        print(f"Research Plan Set: {state.get('research_plan') is not None}")
+        print(f"Current Phase: {state.get('phase')}")
+
+    except Exception as e:
+        print(f"\nError during testing: {str(e)}")
+
 
 if __name__ == "__main__":
-    # Example usage
-    sample_query = "Impact of transformer models on time-series forecasting"
-    report = run_research_workflow(sample_query)
-    print(report)
+    main()

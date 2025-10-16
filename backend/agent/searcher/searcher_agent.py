@@ -18,6 +18,8 @@ from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 from strands.types.exceptions import MCPClientInitializationError
 from mcp.client.streamable_http import streamablehttp_client
+from searcher.searcher_models import SearchResult
+
 
 # Enable debug logs
 logging.getLogger("strands").setLevel(logging.DEBUG)
@@ -407,12 +409,19 @@ def execute_search(query_input: str | dict, verbose: bool = True) -> str:
         # Execute the search
         response = searcher_agent(formatted_query)
 
+        print("\n(Response) AGENT RESPONSE:")
+        print(response)
+
+        structured_response = searcher_agent.structured_output(
+            output_model=SearchResult, prompt="Extract structured data from response"
+        )
+
         if verbose:
-            print("\n(Response) AGENT RESPONSE:")
-            print(response)
+            print("\n(Response) Structured RESPONSE:")
+            print(structured_response.model_dump())
             print("\n")
 
-        return str(response)
+        return str(structured_response)
 
     except Exception as e:
         error_msg = f"(Error) Error: {str(e)}"
