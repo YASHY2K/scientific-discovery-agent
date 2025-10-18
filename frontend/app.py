@@ -9,31 +9,92 @@ import os
 import uuid
 import json
 import time
+import logging
 import streamlit as st
 import boto3
+from botocore.config import Config
 from botocore.exceptions import NoCredentialsError, ClientError
-from dotenv import load_dotenv
+from utils import get_config_value
 
-# Load environment variables from .env file
-load_dotenv()
+# Configure logging for debugging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Research Agent Chat", page_icon="🔬", layout="wide")
+
+
+def is_valid_plain_text(text: str) -> tuple[bool, str]:
+    """
+    Validate that input contains only plain text characters.
+
+    Args:
+        text: User input string to validate
+
+    Returns:
+        tuple: (is_valid: bool, error_message: str)
+    """
+    import re
+
+    # Check for whitespace-only input
+    if not text or text.strip() == "":
+        return (
+            False,
+            "Special characters and symbols are not allowed. Please use only letters, numbers, and basic punctuation.",
+        )
+
+    # Define allowed characters pattern
+    allowed_pattern = re.compile(r"^[a-zA-Z0-9\s.,!?;:\'\"\-\(\)\[\]&@#%/\\+]+$")
+
+    # Check if text contains only allowed characters
+    if not allowed_pattern.match(text):
+        # Define emoji pattern for more specific error message
+        emoji_pattern = re.compile(
+            "["
+            "\U0001f600-\U0001f64f"  # emoticons
+            "\U0001f300-\U0001f5ff"  # symbols & pictographs
+            "\U0001f680-\U0001f6ff"  # transport & map symbols
+            "\U0001f1e0-\U0001f1ff"  # flags
+            "\U0001f900-\U0001f9ff"  # supplemental symbols
+            "]+",
+            flags=re.UNICODE,
+        )
+
+        # Check if it's specifically an emoji
+        if emoji_pattern.search(text):
+            return False, "Emojis are not allowed in research queries."
+        else:
+            return (
+                False,
+                "Special characters and symbols are not allowed. Please use only letters, numbers, and basic punctuation.",
+            )
+
+    return True, ""
 
 
 @st.cache_resource
 def get_bedrock_client():
     """
-    Initialize and cache the AWS Bedrock AgentCore client.
-
-    Uses @st.cache_resource to prevent recreating the client on every rerun.
-    Loads AWS configuration from environment variables.
+    Initialize and cache the AWS Bedrock AgentCore client with retry config.
 
     Returns:
-        boto3.Client: Bedrock AgentCore client
+        boto3.Client: Bedrock AgentCore client with adaptive retry
     """
-    aws_region = os.getenv("AWS_REGION", "us-east-1")
+    aws_region = get_config_value("AWS_REGION", "/app/config/AWS_REGION") or "us-east-1"
 
-    return boto3.client("bedrock-agent-runtime", region_name=aws_region)
+    # Configure boto3 with adaptive retry mode (handles rate limiting automatically)
+    config = Config(
+        retries={
+            "total_max_attempts": 5,  # 1 initial + 4 retries
+            "mode": "adaptive",  # Includes automatic rate limiting
+        },
+        connect_timeout=30,
+        read_timeout=300,  # 5 minutes for long-running agents
+        max_pool_connections=25,  # Match AgentCore's 25 TPS limit
+    )
+
+    return boto3.client("bedrock-agentcore", region_name=aws_region, config=config)
 
 
 # Initialize messages list for chat history
@@ -44,10 +105,14 @@ if "messages" not in st.session_state:
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
+# Simple rate limiting - track last request time
+if "last_request" not in st.session_state:
+    st.session_state.last_request = 0
+
 
 def invoke_agent(prompt: str, session_id: str) -> dict:
     """
-    Invoke the multi-agent research system via AWS Bedrock AgentCore.
+    Invoke the multi-agent research system via AWS Bedrock AgentCore Runtime.
 
     Args:
         prompt: User's research question
@@ -62,32 +127,33 @@ def invoke_agent(prompt: str, session_id: str) -> dict:
         Exception: For other unexpected errors
     """
     client = get_bedrock_client()
-    agent_runtime_arn = os.getenv("AGENT_RUNTIME_ARN")
+    agent_runtime_arn = get_config_value(
+        "AGENT_RUNTIME_ARN", "/app/config/AGENT_RUNTIME_ARN"
+    )
 
     if not agent_runtime_arn:
         raise ValueError("AGENT_RUNTIME_ARN environment variable is not set")
 
-    payload = {
-        "input": {
+    payload = json.dumps(
+        {
             "prompt": prompt,
             "session_id": session_id,
             "user_id": "streamlit-user",
         }
-    }
+    ).encode("utf-8")
 
-    response = client.invoke_agent(
-        agentId=agent_runtime_arn,
-        agentAliasId="TSTALIASID",  # Default test alias
-        sessionId=session_id,
-        inputText=prompt,
+    response = client.invoke_agent_runtime(
+        agentRuntimeArn=agent_runtime_arn,
+        runtimeSessionId=session_id,
+        payload=payload,
+        qualifier="DEFAULT",  # Optional: specify a version/endpoint
     )
 
-    response_body = ""
-    for event in response.get("completion", []):
-        if "chunk" in event:
-            chunk = event["chunk"]
-            if "bytes" in chunk:
-                response_body += chunk["bytes"].decode("utf-8")
+    content = []
+    for chunk in response.get("response", []):
+        content.append(chunk.decode("utf-8"))
+
+    response_body = "".join(content)
 
     try:
         response_data = json.loads(response_body)
@@ -124,7 +190,7 @@ with st.sidebar:
     2. **🔍 Searcher** - Finds papers
     3. **📊 Analyzer** - Analyzes content
     4. **⚖️ Critique** - Reviews quality
-    5. **📝 Reporter** - Generates report
+    5. **📝 Reporter** - Generates final report
     
     ---
     
@@ -160,6 +226,47 @@ for message in st.session_state.messages:
 
 # Display chat input and handle user messages
 if prompt := st.chat_input("What research topic would you like to explore?"):
+    # Validate input before processing with error handling
+    try:
+        is_valid, error_message = is_valid_plain_text(prompt)
+    except Exception as e:
+        # Log validation error for debugging
+        logger.error(f"Input validation error: {str(e)}", exc_info=True)
+
+        # Fail open: allow input to proceed if validation encounters unexpected errors
+        st.warning("⚠️ Input validation temporarily unavailable. Proceeding with query.")
+        is_valid = True
+        error_message = ""
+
+    if not is_valid:
+        # Display error without adding to chat history
+        st.error(
+            f"""
+❌ **Invalid Input**
+
+{error_message}
+
+**Acceptable characters:**
+- Letters (A-Z, a-z)
+- Numbers (0-9)
+- Basic punctuation (. , ! ? ; : ' " - ( ) [ ])
+- Common symbols (& @ # % / \\)
+
+**Example valid queries:**
+- "Find recent papers on transformer architectures in NLP"
+- "What are the latest developments in quantum computing?"
+"""
+        )
+        st.stop()  # Prevent further execution
+
+    # Simple MVP rate limiting
+    if time.time() - st.session_state.last_request < 300:
+        st.warning("⚠️ Please wait 5 minutes between requests")
+        st.stop()
+
+    # Update last request time
+    st.session_state.last_request = time.time()
+
     # Append user message to session state
     st.session_state.messages.append({"role": "user", "content": prompt})
 
@@ -231,7 +338,19 @@ Please configure your AWS credentials:
         except ClientError as e:
             error_code = e.response["Error"]["Code"]
             error_message = e.response["Error"]["Message"]
-            error_msg = f"❌ **AWS Error ({error_code})**: {error_message}"
+
+            # ADDED: Better error handling for throttling
+            if error_code == "ThrottlingException":
+                error_msg = """
+❌ **Rate Limit Exceeded**
+
+The system is temporarily busy. Please try again in a moment.
+
+💡 *The system automatically retries up to 5 times with exponential backoff.*
+"""
+            else:
+                error_msg = f"❌ **AWS Error ({error_code})**: {error_message}"
+
             st.error(error_msg)
             st.session_state.messages.append(
                 {"role": "assistant", "content": error_msg}

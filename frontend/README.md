@@ -18,6 +18,21 @@ The frontend is built with:
 - **AWS Bedrock Agent Runtime** - Integration with the multi-agent research system
 - **boto3** - AWS SDK for Python
 
+### Configuration Management
+
+The application uses a hybrid configuration approach:
+
+- **Local Development**: Configuration via environment variables for simplicity
+- **Production (App Runner)**: Configuration via AWS Systems Manager (SSM) Parameter Store for security and centralized management
+
+The `utils.py` module provides a `get_config_value()` function that:
+
+1. Checks for environment variables first (for local development)
+2. Falls back to SSM Parameter Store if environment variables are not set (for production)
+3. Returns `None` if configuration is not found in either location
+
+This approach allows seamless local development without AWS SSM access while enabling secure, centralized configuration management in production.
+
 ## Prerequisites
 
 - Python 3.11 or higher
@@ -33,41 +48,23 @@ cd frontend
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment Variables
+### 2. Configure Environment Variables for Local Development
 
-Copy the example environment file and update with your AWS configuration:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set the following variables:
+For local development, set environment variables in your shell:
 
 ```bash
-# Required
-AWS_REGION=us-east-1
-AWS_ACCOUNT_ID=123456789012
-AGENT_RUNTIME_ARN=arn:aws:bedrock-agent:us-east-1:123456789012:agent/AGENT_ID
-
-# Optional: If not using AWS CLI profile
-# AWS_ACCESS_KEY_ID=your_access_key_id
-# AWS_SECRET_ACCESS_KEY=your_secret_access_key
+export AWS_REGION=us-east-1
+export AGENT_RUNTIME_ARN=arn:aws:bedrock-agent:us-east-1:123456789012:agent/AGENT_ID
 ```
+
+The application checks environment variables first, then falls back to AWS Systems Manager (SSM) Parameter Store for production deployments.
 
 ### 3. Configure AWS Credentials
 
-If you haven't already, configure your AWS credentials:
+Configure your AWS credentials for local development:
 
 ```bash
 aws configure
-```
-
-Or set environment variables directly:
-
-```bash
-export AWS_ACCESS_KEY_ID=your_access_key_id
-export AWS_SECRET_ACCESS_KEY=your_secret_access_key
-export AWS_REGION=us-east-1
 ```
 
 ## Local Development
@@ -98,6 +95,28 @@ The application will be available at `http://localhost:8501`
 5. Check that chat history persists during the session
 
 ## Deployment to AWS App Runner
+
+### Prerequisites: Configure SSM Parameter Store
+
+Before deploying to App Runner, create the required SSM parameters:
+
+```bash
+# Create AWS region parameter
+aws ssm put-parameter \
+  --name "/app/config/AWS_REGION" \
+  --value "us-east-1" \
+  --type "String" \
+  --description "AWS region for Bedrock agent"
+
+# Create agent runtime ARN parameter
+aws ssm put-parameter \
+  --name "/app/config/AGENT_RUNTIME_ARN" \
+  --value "arn:aws:bedrock-agent:us-east-1:123456789012:agent/AGENT_ID" \
+  --type "String" \
+  --description "Bedrock agent runtime ARN"
+```
+
+Replace the values with your actual AWS region and agent ARN.
 
 ### Option 1: Using the Deployment Script
 
@@ -174,13 +193,9 @@ docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITO
 
 **Environment variables:**
 
-```
-AWS_REGION=us-east-1
-AWS_ACCOUNT_ID=123456789012
-AGENT_RUNTIME_ARN=arn:aws:bedrock-agent:us-east-1:123456789012:agent/AGENT_ID
-```
+No environment variables are required in App Runner. The application retrieves configuration from SSM Parameter Store using the instance role.
 
-**IAM Role:**
+**IAM Instance Role:**
 Create or select an IAM role with the following permissions:
 
 ```json
@@ -189,12 +204,22 @@ Create or select an IAM role with the following permissions:
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": ["bedrock-agent-runtime:InvokeAgent"],
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:*:*:parameter/app/config/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "bedrock-agent-runtime:InvokeAgent",
       "Resource": "arn:aws:bedrock-agent:*:*:agent/*"
     }
   ]
 }
 ```
+
+This role grants the App Runner service permission to:
+
+- Read configuration parameters from SSM Parameter Store under `/app/config/*`
+- Invoke the Bedrock agent runtime
 
 4. Click "Create & deploy"
 
@@ -202,25 +227,37 @@ Create or select an IAM role with the following permissions:
 
 After deployment, App Runner will provide a public URL (e.g., `https://xxxxx.us-east-1.awsapprunner.com`). Access this URL to use the application.
 
-## Environment Variables Reference
+## Configuration Reference
 
-| Variable                | Required | Description                             | Example                                                       |
-| ----------------------- | -------- | --------------------------------------- | ------------------------------------------------------------- |
-| `AWS_REGION`            | Yes      | AWS region where your agent is deployed | `us-east-1`                                                   |
-| `AWS_ACCOUNT_ID`        | Yes      | Your AWS account ID                     | `123456789012`                                                |
-| `AGENT_RUNTIME_ARN`     | Yes      | Full ARN of your Bedrock agent          | `arn:aws:bedrock-agent:us-east-1:123456789012:agent/AGENT_ID` |
-| `AWS_ACCESS_KEY_ID`     | No\*     | AWS access key (if not using IAM role)  | `AKIAIOSFODNN7EXAMPLE`                                        |
-| `AWS_SECRET_ACCESS_KEY` | No\*     | AWS secret key (if not using IAM role)  | `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`                    |
+### Local Development (Environment Variables)
 
-\*Not required when using AWS CLI profile locally or IAM role in App Runner
+For local development, set these environment variables:
+
+| Variable            | Required | Description                             | Example                                                       |
+| ------------------- | -------- | --------------------------------------- | ------------------------------------------------------------- |
+| `AWS_REGION`        | Yes      | AWS region where your agent is deployed | `us-east-1`                                                   |
+| `AGENT_RUNTIME_ARN` | Yes      | Full ARN of your Bedrock agent          | `arn:aws:bedrock-agent:us-east-1:123456789012:agent/AGENT_ID` |
+
+AWS credentials are managed through the AWS CLI (`aws configure`) or IAM roles.
+
+### Production (SSM Parameter Store)
+
+For App Runner deployments, configuration is stored in SSM Parameter Store:
+
+| Parameter Name                  | Type   | Description                             | Example                                                       |
+| ------------------------------- | ------ | --------------------------------------- | ------------------------------------------------------------- |
+| `/app/config/AWS_REGION`        | String | AWS region where your agent is deployed | `us-east-1`                                                   |
+| `/app/config/AGENT_RUNTIME_ARN` | String | Full ARN of your Bedrock agent          | `arn:aws:bedrock-agent:us-east-1:123456789012:agent/AGENT_ID` |
+
+The application automatically retrieves these values using the App Runner instance role.
 
 ## Project Structure
 
 ```
 frontend/
 ├── app.py                    # Main Streamlit application
+├── utils.py                  # Configuration utilities (SSM integration)
 ├── requirements.txt          # Python dependencies
-├── .env.example             # Environment variable template
 ├── Dockerfile               # Container configuration
 ├── deploy.sh                # Deployment automation script
 ├── .streamlit/
@@ -257,9 +294,8 @@ The Docker image:
 
 **Solution**:
 
-1. Run `aws configure` to set up credentials
-2. Or set environment variables: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
-3. For App Runner, ensure the IAM role is properly attached
+1. For local development: Run `aws configure` to set up credentials
+2. For App Runner: Ensure the IAM instance role is properly attached with SSM and Bedrock permissions
 
 ### Agent Runtime ARN Invalid
 
@@ -267,9 +303,10 @@ The Docker image:
 
 **Solution**:
 
-1. Verify `AGENT_RUNTIME_ARN` in your `.env` file
-2. Ensure the ARN format is correct: `arn:aws:bedrock-agent:region:account:agent/AGENT_ID`
-3. Confirm the agent is deployed and accessible
+1. For local development: Verify `AGENT_RUNTIME_ARN` environment variable
+2. For App Runner: Verify the `/app/config/AGENT_RUNTIME_ARN` parameter in SSM Parameter Store
+3. Ensure the ARN format is correct: `arn:aws:bedrock-agent:region:account:agent/AGENT_ID`
+4. Confirm the agent is deployed and accessible
 
 ### Connection Timeout
 
@@ -298,7 +335,7 @@ The Docker image:
 When you submit a research question, the system executes a multi-agent workflow:
 
 1. **📋 Planner Agent** - Creates a research plan based on your query
-2. **🔍 Searcher Agent** - Searches arXiv, PubMed, and Semantic Scholar for relevant papers
+2. **🔍 Searcher Agent** - Searches arXiv and Semantic Scholar for relevant papers
 3. **📊 Analyzer Agent** - Analyzes paper content and extracts key findings
 4. **⚖️ Critique Agent** - Reviews the analysis quality and suggests improvements
 5. **📝 Reporter Agent** - Generates the final research report with citations
