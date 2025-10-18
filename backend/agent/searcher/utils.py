@@ -55,14 +55,21 @@ def get_api_key(secret_name: str, region_name: str = "us-east-1") -> Optional[st
     Returns:
         The secret string if successful, otherwise None
     """
+    logger.info(f"[KEY] Attempting to retrieve secret: {secret_name}")
+
     sts_client = boto3.client("sts")
 
     # Assume the role
+    logger.info("[LOCK] Assuming IAM role for Secrets Manager access...")
     sts_response = sts_client.assume_role(
-        RoleArn="arn:aws:iam::047719637619:role/service-role/acquire_paper-role-2d4cvn4a",
+        RoleArn="arn:aws:iam::047719637619:role/AnalyzerS3AccessRole",
         RoleSessionName="searceh_agent_session",
         DurationSeconds=3600,  # 1 hour session
     )
+    logger.info(
+        f"[OK] Successfully assumed role: {sts_response['AssumedRoleUser']['Arn']}"
+    )
+    logger.debug(f"Full STS response: {sts_response}")
 
     # Extract temporary credentials
     credentials = sts_response["Credentials"]
@@ -76,12 +83,21 @@ def get_api_key(secret_name: str, region_name: str = "us-east-1") -> Optional[st
     )
 
     try:
+        logger.debug(f"[FETCH] Fetching secret value from Secrets Manager...")
         response = client.get_secret_value(SecretId=secret_name)
         if "SecretString" in response:
+            logger.debug(
+                f"[OK] Successfully retrieved secret: {response["SecretString"]}"
+            )
             return response["SecretString"]
+        else:
+            logger.debug(
+                f"[WARN] Secret '{secret_name}' exists but has no SecretString"
+            )
     except ClientError as e:
-        logger.error(f"Error retrieving secret '{secret_name}': {e}")
+        logger.error(f"[ERROR] Error retrieving secret '{secret_name}': {e}")
 
+    logger.warning(f"[WARN] Returning None for secret: {secret_name}")
     return None
 
 
@@ -128,13 +144,13 @@ def process_id(paper_id: str) -> str:
             external_ids = data.get("externalIds", {})
             if "ArXiv" in external_ids:
                 arxiv_id = external_ids["ArXiv"]
-                logger.info(f"✅ Found arXiv ID for S2 paper: {arxiv_id}")
+                logger.info(f"[OK] Found arXiv ID for S2 paper: {arxiv_id}")
                 return arxiv_id
             else:
-                logger.warning(f"⚠️  No arXiv ID found for S2 paper: {identifier}")
+                logger.warning(f"[WARN] No arXiv ID found for S2 paper: {identifier}")
 
         except Exception as e:
-            logger.error(f"❌ Error fetching arXiv ID for {identifier}: {e}")
+            logger.error(f"[ERROR] Error fetching arXiv ID for {identifier}: {e}")
 
     else:
         logger.warning(f"Unknown paper source: {source}")
@@ -153,7 +169,6 @@ def enrich_papers_with_s3_paths(papers: List[Dict]) -> List[Dict]:
         Enriched papers with S3 paths added
     """
     enriched_papers = []
-
     for paper in papers:
         paper_copy = paper.copy()
         paper_id = paper.get("id", "")
@@ -169,13 +184,13 @@ def enrich_papers_with_s3_paths(papers: List[Dict]) -> List[Dict]:
                 paper_copy["s3_chunks_path"] = (
                     f"s3://ai-agent-hackathon-processed-pdf-files/{arxiv_id}/chunks.json"
                 )
-                logger.debug(f"📦 Enriched: {paper_copy['s3_text_path']}")
+                logger.debug(f"[ENRICHED] Enriched: {paper_copy['s3_text_path']}")
             else:
                 paper_copy["arxiv_id"] = None
                 paper_copy["s3_text_path"] = None
                 paper_copy["s3_chunks_path"] = None
                 logger.warning(
-                    f"⚠️  No arXiv ID for: {paper.get('title', 'Unknown')[:50]}"
+                    f"[WARN] No arXiv ID for: {paper.get('title', 'Unknown')[:50]}"
                 )
         else:
             paper_copy["arxiv_id"] = None

@@ -19,8 +19,8 @@ from strands.tools.mcp import MCPClient
 from strands.types.exceptions import MCPClientInitializationError
 from mcp.client.streamable_http import streamablehttp_client
 
-from .searcher_models import SearchResult
-from .utils import enrich_papers_with_s3_paths
+from searcher_models import SearchResult
+from utils import enrich_papers_with_s3_paths
 
 # Enable debug logs
 logging.getLogger("strands").setLevel(logging.DEBUG)
@@ -411,7 +411,15 @@ def execute_search(query_input: str | dict, verbose: bool = True) -> str:
 
         if verbose:
             print("\n(Response) Structured Response:")
-            print(final_response)
+            try:
+                # Use json.dumps with ensure_ascii=False to handle Unicode characters
+                print(json.dumps(final_response, indent=2, ensure_ascii=False))
+            except Exception as print_error:
+                logger.warning(
+                    f"Could not print response with special characters: {print_error}"
+                )
+                # Fallback: print with ASCII encoding
+                print(json.dumps(final_response, indent=2, ensure_ascii=True))
             print()
 
         return final_response
@@ -420,7 +428,7 @@ def execute_search(query_input: str | dict, verbose: bool = True) -> str:
         error_msg = f"(Error) Error: {str(e)}"
         if verbose:
             print(error_msg)
-        logger.error(f"Search execution failed: {e}")
+        logger.error(f"Search execution failed: {e}", exc_info=True)
         return error_msg
 
 
@@ -484,6 +492,16 @@ def cleanup():
 
 if __name__ == "__main__":
     import sys
+    import io
+
+    # Force UTF-8 encoding for stdout to handle special characters
+    if sys.platform == "win32":
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace"
+        )
+        sys.stderr = io.TextIOWrapper(
+            sys.stderr.buffer, encoding="utf-8", errors="replace"
+        )
 
     try:
         # Check command line arguments
