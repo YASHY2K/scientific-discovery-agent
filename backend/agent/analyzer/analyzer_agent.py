@@ -16,7 +16,7 @@ from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 from strands.types.exceptions import MCPClientInitializationError
 from mcp.client.streamable_http import streamablehttp_client
-from analyzer.analyzer_models import AnalysisResponse
+from .analyzer_models import AnalysisResponse
 
 
 import httpx
@@ -51,8 +51,8 @@ ANALYZER_SYSTEM_PROMPT = """You are a Scientific Paper Analysis Agent. Your miss
 You MUST follow these steps in order:
 
 ### Step 1: Document Retrieval
-- Use the `download_s3_document` tool to retrieve the full text of papers from S3
-- The S3 URI format is: `s3://bucket-name/prefix/full_text.txt`
+- Use the `download_s3_document` tool to retrieve the chunked textof papers from S3
+- The S3 URI format is: `s3://bucket-name/prefix/chunks.json`
 - You can retrieve multiple papers if needed for comparative analysis
 
 ### Step 2: Content Analysis
@@ -78,7 +78,7 @@ You MUST follow these steps in order:
 ## Tool Specifications
 
 1. **download_s3_document**
-   - Input: `{"s3_uri": "s3://bucket-name/prefix/full_text.txt"}`
+   - Input: `{"s3_chunks_path": "s3://bucket-name/prefix/chunks.json"}`
    - Returns: The full text content of the document
    - Use this tool for each paper you need to analyze
 
@@ -90,7 +90,7 @@ Your final output MUST be a single, valid JSON object matching this structure:
   "analysis_id": "unique_identifier",
   "papers_analyzed": [
     {
-      "s3_uri": "s3://bucket/prefix/full_text.txt",
+      "s3_chunks_path": "s3://bucket/prefix/chunks.json",
       "title": "Extracted or inferred title",
       "key_findings": [
         "Finding 1 with supporting evidence",
@@ -220,7 +220,7 @@ def download_s3_document(s3_uri: str) -> str:
     Download a document from S3 using its URI.
 
     Args:
-        s3_uri: S3 URI in format 's3://bucket-name/prefix/filename.txt'
+        s3_chunks_path: S3 URI in format 's3://bucket-name/prefix/filename.json'
 
     Returns:
         The text content of the document
@@ -435,7 +435,7 @@ def execute_analysis(
     Execute an analysis directly using the analyzer agent.
 
     Args:
-        paper_uris: S3 URI(s) of papers to analyze
+        s3_chunks_path: S3 URI(s) path of papers to analyze
         context: Optional analysis context
         verbose: If True, prints progress information
 
@@ -480,7 +480,7 @@ def execute_analysis(
             print(structured_response.model_dump())
             print("\n")
 
-        return str(structured_response)
+        return json.dumps(structured_response.model_dump())
 
     except Exception as e:
         error_msg = f"(Error) Error: {str(e)}"

@@ -1,28 +1,63 @@
-from strands import Agent
+import json
+from strands import Agent, tool
 from strands.models import BedrockModel
-from planner.planner_models import ResearchPlan
+from .planner_models import ResearchPlan
+
 
 Planner_Agent_prompt = """
-        You are a Research Planning Specialist.
+        You are a Research Planning Specialist that MUST output ONLY structured JSON.
 
-        Use structured output when requested to provide comprehensive research.
+        CRITICAL INSTRUCTIONS:
+        1. YOUR ENTIRE RESPONSE MUST BE VALID JSON.
+        2. DO NOT include any natural language text, explanations, or non-JSON content.
+        3. NO markdown, no formatting, no introductory text.
+        4. JUST the JSON object matching this schema exactly:
 
-        Analyze the query and decide:
-        1. Complexity: simple, moderate, or complex?
-        2. Approach: focused_deep_dive, comparative_analysis, or comprehensive_survey?
-        3. Sub-topics: What independent areas need investigation?
+        {
+            "research_approach": "focused_deep_dive" | "comparative_analysis" | "comprehensive_survey",
+            "sub_topics": [
+                {
+                    "id": "ST1",  // Use sequential numbers ST1, ST2, etc.
+                    "description": "Clear description of what to investigate",
+                    "priority": 1,  // 1=highest, 2=medium, 3=lowest
+                    "success_criteria": "Specific, measurable target",
+                    "suggested_keywords": ["keyword1", "keyword2", "keyword3"],
+                    "search_guidance": {
+                        "focus_on": "What aspects to emphasize",
+                        "must_include": "Required elements in papers",
+                        "avoid": "What to exclude as out of scope"
+                    }
+                }
+            ]
+        }
 
-        Key principles:
-        - Don't over-decompose: "Latest X papers" = 1 sub-topic
-        - Comparisons ("X vs Y"): Usually 2 sub-topics (one per approach)
-        - Multi-faceted queries: 3-4 sub-topics for distinct perspectives
-        - No overlap: Each sub-topic must be independently investigatable
+        Guidelines for plan generation:
 
-        For each sub-topic:
-        - Provide 3-5 keywords (starting suggestions only)
-        - Set realistic success criteria (paper counts based on topic breadth)
-        - Give clear search guidance (focus, requirements, exclusions)
-        
+        1. TESTING MODE - CRITICAL INSTRUCTIONS:
+           - Create EXACTLY ONE sub-topic
+           - Use the main query as the sub-topic description
+           - Keep it simple and focused
+           - Do not decompose or expand the query
+           - Do not create multiple aspects or comparisons
+
+        2. Sub-topic requirements (ONE ONLY):
+           - Assign ID "ST1"
+           - Use query directly as description
+           - Set priority 1
+           - Include 1-2 keywords only
+           - Keep success criteria simple
+           - Basic search guidance
+
+        3. Success criteria for testing:
+           - "Find 1 relevant paper"
+           - Keep it minimal for testing
+
+        4. Search guidance for testing:
+           focus_on: Main concept only
+           must_include: Core topic
+           avoid: Complex requirements
+
+        REMEMBER: Output ONLY the JSON object. No other text or explanation.
 """
 
 model_id = "us.anthropic.claude-3-5-sonnet-20240620-v1:0"  # Corrected Model ID
@@ -35,7 +70,7 @@ planner_agent = Agent(
 
 
 # --- NEW: STRUCTURED EXECUTION FUNCTION ---
-def execute_planning(query: str) -> ResearchPlan:
+def execute_planning(query: str) -> str:
     """
     Builds a structured prompt and executes the planning agent.
 
@@ -43,23 +78,23 @@ def execute_planning(query: str) -> ResearchPlan:
         query: The raw user research query.
 
     Returns:
-        A structured ResearchPlan object.
+        A JSON string in the format expected by the orchestrator
     """
-    # You can add more context to the prompt if needed in the future
     structured_prompt = f"""Please create a comprehensive research plan for the following query.
 Analyze its complexity, determine the best approach, and decompose it into independent sub-topics with clear search guidance.
 
 USER QUERY: "{query}"
 """
 
-    print("📝 Calling Planner Agent with structured prompt...")
+    print("Calling Planner Agent with structured prompt...")
 
     # Call the agent with the structured prompt
     plan = planner_agent.structured_output(
         output_model=ResearchPlan, prompt=structured_prompt
     )
 
-    return plan
+    # Convert to orchestrator expected format
+    return json.dumps(plan.model_dump())
 
 
 if __name__ == "__main__":
@@ -69,6 +104,7 @@ if __name__ == "__main__":
     )
 
     plan = execute_planning(user_query)
+    print(plan)
 
     print(f"\nApproach: {plan.research_approach}")
     print(f"Sub-topics: {len(plan.sub_topics)}\n")

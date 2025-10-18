@@ -21,7 +21,7 @@ REGION = boto_session.region_name
 
 logger = logging.getLogger(__name__)
 
-from utils import get_ssm_parameter, put_ssm_parameter
+from backend.agent.utils.utils import get_ssm_parameter, put_ssm_parameter
 
 ACTOR_ID = "customer_001"
 SESSION_ID = str(uuid.uuid4())

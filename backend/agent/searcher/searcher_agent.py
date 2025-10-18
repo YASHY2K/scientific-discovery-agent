@@ -18,8 +18,9 @@ from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 from strands.types.exceptions import MCPClientInitializationError
 from mcp.client.streamable_http import streamablehttp_client
-from searcher.searcher_models import SearchResult
 
+from .searcher_models import SearchResult
+from .utils import enrich_papers_with_s3_paths
 
 # Enable debug logs
 logging.getLogger("strands").setLevel(logging.DEBUG)
@@ -394,34 +395,26 @@ def execute_search(query_input: str | dict, verbose: bool = True) -> str:
         # Format the query with directives
         formatted_query = format_search_query(query_input, include_directives=True)
 
-        if verbose:
-            print("=" * 80)
-            print("(Query) Executing search with query:")
-            print("-" * 80)
-            if isinstance(query_input, dict):
-                print(f"Sub-topic ID: {query_input.get('id', 'N/A')}")
-                print(f"Description: {query_input.get('description', 'N/A')}")
-            else:
-                print(query_input)
-            print("=" * 80)
-            print()
-
         # Execute the search
         response = searcher_agent(formatted_query)
 
-        print("\n(Response) AGENT RESPONSE:")
-        print(response)
-
         structured_response = searcher_agent.structured_output(
-            output_model=SearchResult, prompt="Extract structured data from response"
+            output_model=SearchResult,
+            prompt="Extract structured data from response",
+        )
+        final_response = structured_response.model_dump()
+        print(type(final_response), final_response)
+
+        final_response["selected_papers"] = enrich_papers_with_s3_paths(
+            final_response["selected_papers"]
         )
 
         if verbose:
-            print("\n(Response) Structured RESPONSE:")
-            print(structured_response.model_dump())
-            print("\n")
+            print("\n(Response) Structured Response:")
+            print(final_response)
+            print()
 
-        return str(structured_response)
+        return final_response
 
     except Exception as e:
         error_msg = f"(Error) Error: {str(e)}"
