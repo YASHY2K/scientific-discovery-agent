@@ -1,47 +1,118 @@
-import base64
-import hashlib
-import hmac
-import json
-import os
-from typing import Optional, List, Dict, Any
-
-
-import logging
+from typing import Dict, List, Optional
 import requests
-
+import logging
 import boto3
-import yaml
-from boto3.session import Session
+import httpx
 from botocore.exceptions import ClientError
 
 
+from strands.types.exceptions import MCPClientInitializationError
+
+
+# Enable debug logs
+logging.getLogger("strands").setLevel(logging.DEBUG)
+logging.basicConfig(
+    format="%(levelname)s | %(name)s | %(message)s", handlers=[logging.StreamHandler()]
+)
+
 logger = logging.getLogger(__name__)
 
+SSM_PARAMETERS_MAP = {
+    "AC_USER_ID": "/scientific-agent/config/cognito-user-id",
+    "AC_USER_SECRET": "/scientific-agent/secrets/cognito-user-secret",
+    "AC_USER_SCOPE": "/scientific-agent/config/cognito-user-scope",
+    "COGNITO_DISCOVERY_URL": "/scientific-agent/config/cognito-discovery-url",
+    "AGENTCORE_GATEWAY_URL": "/scientific-agent/config/agentcore-gateway-url",
+    "ACCESS_TOKEN": "/scientific-agent/secrets/agentcore-access-token",
+}
 
-def get_ssm_parameter(name: str, with_decryption: bool = True) -> str:
-    ssm = boto3.client("ssm")
 
-    response = ssm.get_parameter(Name=name, WithDecryption=with_decryption)
+def get_ssm_parameters() -> dict:
+    """Fetch configuration from AWS SSM Parameter Store."""
+    ssm_client = boto3.client("ssm")
+    param_names = list(SSM_PARAMETERS_MAP.values())
+    logger.info("Fetching configuration from AWS SSM Parameter Store...")
 
-    return response["Parameter"]["Value"]
+    try:
+        response = ssm_client.get_parameters(Names=param_names, WithDecryption=True)
+        config = {}
+        reverse_map = {v: k for k, v in SSM_PARAMETERS_MAP.items()}
+
+        for param in response.get("Parameters", []):
+            env_var_name = reverse_map[param["Name"]]
+            config[env_var_name] = param["Value"]
+
+        missing_keys = set(SSM_PARAMETERS_MAP.keys()) - set(config.keys())
+        if missing_keys:
+            raise KeyError(f"Missing required SSM parameters: {missing_keys}")
+
+        logger.info("(Success) Configuration loaded successfully from SSM")
+        return config
+
+    except ClientError as e:
+        logger.error(f"Error fetching parameters from SSM: {e}")
+        raise
 
 
-def put_ssm_parameter(
-    name: str, value: str, parameter_type: str = "String", with_encryption: bool = False
-) -> None:
-    ssm = boto3.client("ssm")
+def update_ssm_parameter(param_key: str, value: str):
+    """Update a parameter in AWS SSM Parameter Store."""
+    ssm_client = boto3.client("ssm")
+    param_name = SSM_PARAMETERS_MAP.get(param_key)
 
-    put_params = {
-        "Name": name,
-        "Value": value,
-        "Type": parameter_type,
-        "Overwrite": True,
-    }
+    if not param_name:
+        raise ValueError(f"Invalid parameter key: {param_key}")
 
-    if with_encryption:
-        put_params["Type"] = "SecureString"
+    logger.info(f"Updating parameter '{param_name}' in SSM...")
 
-    ssm.put_parameter(**put_params)
+    try:
+        ssm_client.put_parameter(
+            Name=param_name,
+            Value=value,
+            Type="SecureString",
+            Overwrite=True,
+        )
+        logger.info(f"(Success) Parameter '{param_name}' updated successfully")
+    except ClientError as e:
+        logger.error(f"Error updating parameter in SSM: {e}")
+        raise
+
+
+def get_token(client_id: str, client_secret: str, scope_string: str, url: str) -> dict:
+    """Get fresh authentication token from Cognito."""
+    logger.info("Requesting new authentication token from Cognito...")
+
+    try:
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        data = {
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scope": scope_string,
+        }
+        response = requests.post(url, headers=headers, data=data)
+        response.raise_for_status()
+        logger.info("(Success) New token generated successfully")
+        return response.json()
+
+    except requests.exceptions.RequestException as err:
+        logger.error(f"Failed to get new token: {err}")
+        return {"error": str(err)}
+
+
+def _is_unauthorized_error(e: Exception) -> bool:
+    """Check if exception is caused by 401 Unauthorized error."""
+    if not isinstance(e, MCPClientInitializationError):
+        return False
+
+    cause = e.__cause__
+    if isinstance(cause, ExceptionGroup):  # noqa: F821
+        for sub_exc in cause.exceptions:
+            if (
+                isinstance(sub_exc, httpx.HTTPStatusError)
+                and sub_exc.response.status_code == 401
+            ):
+                return True
+    return False
 
 
 def get_api_key(secret_name: str, region_name: str = "us-east-1") -> Optional[str]:
@@ -83,12 +154,12 @@ def get_api_key(secret_name: str, region_name: str = "us-east-1") -> Optional[st
     )
 
     try:
-        logger.debug(f"[FETCH] Fetching secret value from Secrets Manager...")
+        # logger.debug(f"[FETCH] Fetching secret value from Secrets Manager...")
         response = client.get_secret_value(SecretId=secret_name)
         if "SecretString" in response:
-            logger.debug(
-                f"[OK] Successfully retrieved secret: {response["SecretString"]}"
-            )
+            # logger.debug(
+            #     f"[OK] Successfully retrieved secret: {response["SecretString"]}"
+            # )
             return response["SecretString"]
         else:
             logger.debug(
@@ -178,23 +249,18 @@ def enrich_papers_with_s3_paths(papers: List[Dict]) -> List[Dict]:
 
             if arxiv_id:
                 paper_copy["arxiv_id"] = arxiv_id
-                paper_copy["s3_text_path"] = (
-                    f"s3://ai-agent-hackathon-processed-pdf-files/{arxiv_id}/full_text.txt"
-                )
                 paper_copy["s3_chunks_path"] = (
                     f"s3://ai-agent-hackathon-processed-pdf-files/{arxiv_id}/chunks.json"
                 )
-                logger.debug(f"[ENRICHED] Enriched: {paper_copy['s3_text_path']}")
+                logger.debug(f"[ENRICHED] Enriched: {paper_copy['s3_chunks_path']}")
             else:
                 paper_copy["arxiv_id"] = None
-                paper_copy["s3_text_path"] = None
                 paper_copy["s3_chunks_path"] = None
                 logger.warning(
                     f"[WARN] No arXiv ID for: {paper.get('title', 'Unknown')[:50]}"
                 )
         else:
             paper_copy["arxiv_id"] = None
-            paper_copy["s3_text_path"] = None
             paper_copy["s3_chunks_path"] = None
 
         enriched_papers.append(paper_copy)

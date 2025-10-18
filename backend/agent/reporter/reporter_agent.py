@@ -11,6 +11,8 @@ from datetime import datetime
 from strands import Agent
 from strands.models import BedrockModel
 
+from ..utils.reporter_helper import save_report
+
 # Enable debug logs
 logging.getLogger("strands").setLevel(logging.DEBUG)
 logging.basicConfig(
@@ -19,13 +21,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# REPORTER AGENT SYSTEM PROMPT
-# ============================================================================
 
 REPORTER_SYSTEM_PROMPT = """You are a Technical Report Writer specializing in academic research synthesis.
 
-Your role is to compile structured analyses into a comprehensive, well-formatted research report.
+CRITICAL: All output MUST use ASCII characters only. Do not use emojis, special characters, or unicode symbols in your reports.
+
+Your role is to compile structured analyses into a comprehensive, well-formatted research report with the paper references cited using the paper urls.
 
 ## Report Structure
 
@@ -67,6 +68,7 @@ Create a markdown report with these sections:
 - Full bibliography in consistent format
 - Include all papers analyzed
 - Organized alphabetically
+- Paper urls must be included for each reference
 
 ### 8. Appendix (Optional)
 - Search queries used
@@ -181,64 +183,6 @@ Start writing the report now:
     except Exception as e:
         logger.error(f"Report generation error: {e}")
         return f"Error generating report: {str(e)}"
-
-
-# ============================================================================
-# REPORT UTILITIES
-# ============================================================================
-
-
-def save_report(report_text: str, filename: Optional[str] = None) -> str:
-    """
-    Save report to file.
-
-    Args:
-        report_text: The markdown report text
-        filename: Optional filename (default: report_TIMESTAMP.md)
-
-    Returns:
-        Path to saved file
-    """
-    if not filename:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"research_report_{timestamp}.md"
-
-    try:
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(report_text)
-        logger.info(f"Report saved to {filename}")
-        return filename
-    except Exception as e:
-        logger.error(f"Error saving report: {e}")
-        return f"Error: Could not save report ({str(e)})"
-
-
-def format_report_metadata(
-    original_query: str, num_papers: int, num_subtopics: int
-) -> str:
-    """
-    Create report metadata header.
-
-    Args:
-        original_query: Original research question
-        num_papers: Total papers analyzed
-        num_subtopics: Number of sub-topics researched
-
-    Returns:
-        Markdown formatted metadata
-    """
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    metadata = f"""---
-title: Research Report
-query: {original_query}
-generated: {timestamp}
-papers_analyzed: {num_papers}
-subtopics_covered: {num_subtopics}
----
-
-"""
-    return metadata
 
 
 # ============================================================================

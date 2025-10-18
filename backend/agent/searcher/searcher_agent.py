@@ -4,23 +4,24 @@ Following Strands "Agents as Tools" pattern with pragmatic directive prompting.
 This agent specializes in searching academic databases and curating relevant papers.
 """
 
-import requests
 import logging
 import json
-import boto3
-import httpx
-from botocore.exceptions import ClientError
-from typing import Dict, Any, Optional
 
 # AWS Strands and MCP imports
-from strands import Agent, tool
+from strands import Agent
 from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 from strands.types.exceptions import MCPClientInitializationError
 from mcp.client.streamable_http import streamablehttp_client
 
-from searcher_models import SearchResult
-from utils import enrich_papers_with_s3_paths
+from .searcher_models import SearchResult
+from ..utils.searcher_helper import (
+    enrich_papers_with_s3_paths,
+    get_ssm_parameters,
+    update_ssm_parameter,
+    _is_unauthorized_error,
+    get_token,
+)
 
 # Enable debug logs
 logging.getLogger("strands").setLevel(logging.DEBUG)
@@ -30,24 +31,14 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# SSM PARAMETER STORE CONFIGURATION
-# ============================================================================
-
-SSM_PARAMETERS_MAP = {
-    "AC_USER_ID": "/scientific-agent/config/cognito-user-id",
-    "AC_USER_SECRET": "/scientific-agent/secrets/cognito-user-secret",
-    "AC_USER_SCOPE": "/scientific-agent/config/cognito-user-scope",
-    "COGNITO_DISCOVERY_URL": "/scientific-agent/config/cognito-discovery-url",
-    "AGENTCORE_GATEWAY_URL": "/scientific-agent/config/agentcore-gateway-url",
-    "ACCESS_TOKEN": "/scientific-agent/secrets/agentcore-access-token",
-}
 
 # ============================================================================
 # AGENT SYSTEM PROMPT
 # ============================================================================
 
 SEARCHER_SYSTEM_PROMPT = """You are a Scientific Literature Search Agent. Your mission is to execute a multi-step research workflow using the tools provided.
+
+IMPORTANT: All output MUST use ASCII characters only. Do not use emojis, special characters, or unicode symbols.
 
 ## Your Workflow
 You MUST follow these steps in order. DO NOT skip any steps.
@@ -129,98 +120,6 @@ Before you finish, you MUST double-check:
 
 Failure to follow these steps will result in an incorrect response.
 """
-
-# ============================================================================
-# SSM HELPER FUNCTIONS
-# ============================================================================
-
-
-def get_ssm_parameters() -> dict:
-    """Fetch configuration from AWS SSM Parameter Store."""
-    ssm_client = boto3.client("ssm")
-    param_names = list(SSM_PARAMETERS_MAP.values())
-    logger.info("Fetching configuration from AWS SSM Parameter Store...")
-
-    try:
-        response = ssm_client.get_parameters(Names=param_names, WithDecryption=True)
-        config = {}
-        reverse_map = {v: k for k, v in SSM_PARAMETERS_MAP.items()}
-
-        for param in response.get("Parameters", []):
-            env_var_name = reverse_map[param["Name"]]
-            config[env_var_name] = param["Value"]
-
-        missing_keys = set(SSM_PARAMETERS_MAP.keys()) - set(config.keys())
-        if missing_keys:
-            raise KeyError(f"Missing required SSM parameters: {missing_keys}")
-
-        logger.info("(Success) Configuration loaded successfully from SSM")
-        return config
-
-    except ClientError as e:
-        logger.error(f"Error fetching parameters from SSM: {e}")
-        raise
-
-
-def update_ssm_parameter(param_key: str, value: str):
-    """Update a parameter in AWS SSM Parameter Store."""
-    ssm_client = boto3.client("ssm")
-    param_name = SSM_PARAMETERS_MAP.get(param_key)
-
-    if not param_name:
-        raise ValueError(f"Invalid parameter key: {param_key}")
-
-    logger.info(f"Updating parameter '{param_name}' in SSM...")
-
-    try:
-        ssm_client.put_parameter(
-            Name=param_name,
-            Value=value,
-            Type="SecureString",
-            Overwrite=True,
-        )
-        logger.info(f"(Success) Parameter '{param_name}' updated successfully")
-    except ClientError as e:
-        logger.error(f"Error updating parameter in SSM: {e}")
-        raise
-
-
-def get_token(client_id: str, client_secret: str, scope_string: str, url: str) -> dict:
-    """Get fresh authentication token from Cognito."""
-    logger.info("Requesting new authentication token from Cognito...")
-
-    try:
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        data = {
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "scope": scope_string,
-        }
-        response = requests.post(url, headers=headers, data=data)
-        response.raise_for_status()
-        logger.info("(Success) New token generated successfully")
-        return response.json()
-
-    except requests.exceptions.RequestException as err:
-        logger.error(f"Failed to get new token: {err}")
-        return {"error": str(err)}
-
-
-def _is_unauthorized_error(e: Exception) -> bool:
-    """Check if exception is caused by 401 Unauthorized error."""
-    if not isinstance(e, MCPClientInitializationError):
-        return False
-
-    cause = e.__cause__
-    if isinstance(cause, ExceptionGroup):  # noqa: F821
-        for sub_exc in cause.exceptions:
-            if (
-                isinstance(sub_exc, httpx.HTTPStatusError)
-                and sub_exc.response.status_code == 401
-            ):
-                return True
-    return False
 
 
 # ============================================================================

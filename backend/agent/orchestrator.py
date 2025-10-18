@@ -1,41 +1,32 @@
+from datetime import datetime
+import json
 import logging
-
-# Configure logging settings
-logging.basicConfig(
-    format="[%(asctime)s] %(levelname)s: %(message)s",
-    datefmt="%H:%M:%S",
-    handlers=[logging.StreamHandler()]
-)
-
-logging.getLogger("strands.models").setLevel(logging.WARNING)  # Reduce model initialization noise
-logging.getLogger("strands.tools.registry").setLevel(logging.WARNING)  # Reduce tool registration noise
-logging.getLogger("strands.tools.mcp").setLevel(logging.INFO)  # Keep important MCP messages
-
-# Initialize this module's logger
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# Standard library imports
-from typing import List
-
-# Third-party imports
+import requests
+from typing import Optional, List, Dict, Any
+import boto3
+from botocore.exceptions import ClientError
 from strands import Agent, tool
 from strands.models import BedrockModel
-
-# Configure logging
-logging.getLogger("strands.models").setLevel(logging.WARNING)  # Reduce model initialization noise
-logging.getLogger("strands.tools.registry").setLevel(logging.WARNING)  # Reduce tool registration noise
-logging.getLogger("strands.tools.mcp").setLevel(logging.INFO)  # Keep important MCP messages
-
-# Set up clear logging format
-logging.basicConfig(
-    format="[%(asctime)s] %(levelname)s: %(message)s",
-    datefmt="%H:%M:%S",
-    handlers=[logging.StreamHandler()]
+from strands.agent.state import AgentState
+from strands.hooks import (
+    AfterInvocationEvent,
+    HookProvider,
+    HookRegistry,
+    MessageAddedEvent,
 )
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+# from backend.agent.utils.utils import (
+#     get_ssm_parameter,
+#     put_ssm_parameter,
+#     enrich_papers_with_s3_paths,
+# )
+# from backend.agent.utils.agentcore_memory import (
+#     AgentCoreMemoryHook,
+#     memory_client,
+#     ACTOR_ID,
+#     SESSION_ID,
+#     create_or_get_memory_resource,
+# )
 
 # from memory_reader import MemoryReader
 from backend.agent.planner.planner_agent import execute_planning
@@ -43,6 +34,8 @@ from backend.agent.searcher.searcher_agent import execute_search
 from backend.agent.analyzer.analyzer_agent import execute_analysis
 from backend.agent.critique.critique_agent import critique
 from backend.agent.reporter.reporter_agent import report
+
+import json
 
 
 logger = logging.getLogger(__name__)
@@ -181,33 +174,17 @@ orchsetrator_agent = Agent(
     ],
 )
 
-while True:
-    try:
-        user_input = input("You: ").strip()
-        if not user_input:
-            print("Please tell me how I can help you, or type 'exit' to quit")
-            continue
-        if user_input.lower() in ["exit", "quit", "bye", "goodbye"]:
-            print()
-            print("=========================================================")
-            print("Thank you for using Personal Assistant!")
-            print("Have a productive day ahead!")
-            print("Come back anytime you need help!")
-            print("=========================================================")
-            break
 
-        print("PersonalBot: ", end="")
-        response = orchsetrator_agent(user_input)
-        print("\n")
+def execute_orchestrator(user_query: str) -> str:
+    """Execute the orchestrator agent with the user query"""
+    response = orchsetrator_agent(user_query)
+    return response
 
-    except KeyboardInterrupt:
-        print("\n")
-        print("=========================================================")
-        print("Personal Assistant interrupted!")
-        print("See you next time!")
-        print("=========================================================")
-        break
-    except Exception as e:
-        print(f"Error occurred: {str(e)}")
-        print("Please try again or type 'exit' to quit")
-        print()
+
+if __name__ == "__main__":
+    user_query = (
+        "What are the latest advancements in quantum computing for drug discovery?"
+    )
+
+    response = execute_orchestrator(user_query)
+    print(response)

@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 CRITIQUE_SYSTEM_PROMPT = """You are a Research Quality Assurance Specialist.
 
+IMPORTANT: All output MUST use ASCII characters only. Do not use emojis, special characters, or unicode symbols.
+
 Your role is to evaluate the quality and completeness of research analysis.
 
 ## Your Evaluation Criteria
@@ -488,7 +490,7 @@ if __name__ == "__main__":
     }
 
     # Now run critique
-    from critique_agent import critique
+    from backend.agent.critique.critique_agent import critique
 
     result = critique(test_query, test_plan, test_analyses, revision_count=0)
     print("=" * 80)
