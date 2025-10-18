@@ -14,7 +14,7 @@ from typing import Optional
 from strands import Agent, tool
 from strands.models import BedrockModel
 
-from ..utils.analyzer_helper import initialize_s3_client
+from utils.analyzer_helper import initialize_s3_client
 from .analyzer_models import AnalysisResponse
 
 

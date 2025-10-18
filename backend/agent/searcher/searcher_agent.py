@@ -15,7 +15,7 @@ from strands.types.exceptions import MCPClientInitializationError
 from mcp.client.streamable_http import streamablehttp_client
 
 from .searcher_models import SearchResult
-from ..utils.searcher_helper import (
+from utils.searcher_helper import (
     enrich_papers_with_s3_paths,
     get_ssm_parameters,
     update_ssm_parameter,

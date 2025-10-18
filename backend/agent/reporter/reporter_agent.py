@@ -11,7 +11,7 @@ from datetime import datetime
 from strands import Agent
 from strands.models import BedrockModel
 
-from ..utils.reporter_helper import save_report
+from utils.reporter_helper import save_report
 
 # Enable debug logs
 logging.getLogger("strands").setLevel(logging.DEBUG)

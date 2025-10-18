@@ -1,10 +1,7 @@
 from datetime import datetime
-import json
 import logging
-import requests
-from typing import Optional, List, Dict, Any
+from typing import List
 import boto3
-from botocore.exceptions import ClientError
 from strands import Agent, tool
 from strands.models import BedrockModel
 from strands.agent.state import AgentState
@@ -28,15 +25,16 @@ from strands.hooks import (
 #     create_or_get_memory_resource,
 # )
 
+from bedrock_agentcore.runtime import (
+    BedrockAgentCoreApp,
+)
+
 # from memory_reader import MemoryReader
-from backend.agent.planner.planner_agent import execute_planning
-from backend.agent.searcher.searcher_agent import execute_search
-from backend.agent.analyzer.analyzer_agent import execute_analysis
-from backend.agent.critique.critique_agent import critique
-from backend.agent.reporter.reporter_agent import report
-
-import json
-
+from planner.planner_agent import execute_planning
+from searcher.searcher_agent import execute_search
+from analyzer.analyzer_agent import execute_analysis
+from critique.critique_agent import critique
+from reporter.reporter_agent import report
 
 logger = logging.getLogger(__name__)
 
@@ -162,29 +160,28 @@ def reporter_tool(critique_report: str) -> str:
     return report(critique_report)
 
 
-orchsetrator_agent = Agent(
-    model=model,
-    system_prompt=ORCHESTRATOR_PROMPT,
-    tools=[
-        planner_tool,
-        searcher_tool,
-        analyzer_tool,
-        reporter_tool,
-        critique_tool,
-    ],
-)
+app = BedrockAgentCoreApp()
 
 
-def execute_orchestrator(user_query: str) -> str:
-    """Execute the orchestrator agent with the user query"""
+@app.entrypoint
+def invoke(payload):
+    user_query = payload.get("user_query", "No query provided.")
+
+    orchsetrator_agent = Agent(
+        model=model,
+        system_prompt=ORCHESTRATOR_PROMPT,
+        tools=[
+            planner_tool,
+            searcher_tool,
+            analyzer_tool,
+            reporter_tool,
+            critique_tool,
+        ],
+    )
     response = orchsetrator_agent(user_query)
+
     return response
 
 
 if __name__ == "__main__":
-    user_query = (
-        "What are the latest advancements in quantum computing for drug discovery?"
-    )
-
-    response = execute_orchestrator(user_query)
-    print(response)
+    app.run()
