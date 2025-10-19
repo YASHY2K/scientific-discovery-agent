@@ -11,10 +11,8 @@ import json
 import time
 import logging
 import streamlit as st
-import boto3
-from botocore.config import Config
-from botocore.exceptions import NoCredentialsError, ClientError
-from utils import get_config_value
+import requests
+from typing import Optional
 
 # Configure logging for debugging
 logging.basicConfig(
@@ -23,6 +21,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Research Agent Chat", page_icon="🔬", layout="wide")
+
+# ============================================================================
+# Configuration - Switch between local and production
+# ============================================================================
+
+# Set to True for local testing, False for production
+USE_LOCAL_MODE = os.getenv("USE_LOCAL_MODE", "true").lower() == "true"
+LOCAL_API_URL = os.getenv("LOCAL_API_URL", "http://localhost:8000")
+
+# Display mode in sidebar
+MODE = "🖥️ LOCAL" if USE_LOCAL_MODE else "☁️ PRODUCTION"
 
 
 def is_valid_plain_text(text: str) -> tuple[bool, str]:
@@ -73,46 +82,14 @@ def is_valid_plain_text(text: str) -> tuple[bool, str]:
     return True, ""
 
 
-@st.cache_resource
-def get_bedrock_client():
+# ============================================================================
+# Local Mode - Call FastAPI Server
+# ============================================================================
+
+
+def invoke_agent_local(prompt: str, session_id: str) -> dict:
     """
-    Initialize and cache the AWS Bedrock AgentCore client with retry config.
-
-    Returns:
-        boto3.Client: Bedrock AgentCore client with adaptive retry
-    """
-    aws_region = get_config_value("AWS_REGION", "/app/config/AWS_REGION") or "us-east-1"
-
-    # Configure boto3 with adaptive retry mode (handles rate limiting automatically)
-    config = Config(
-        retries={
-            "total_max_attempts": 5,  # 1 initial + 4 retries
-            "mode": "adaptive",  # Includes automatic rate limiting
-        },
-        connect_timeout=30,
-        read_timeout=300,  # 5 minutes for long-running agents
-        max_pool_connections=25,  # Match AgentCore's 25 TPS limit
-    )
-
-    return boto3.client("bedrock-agentcore", region_name=aws_region, config=config)
-
-
-# Initialize messages list for chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# Generate unique session ID for agent context tracking
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
-
-# Simple rate limiting - track last request time
-if "last_request" not in st.session_state:
-    st.session_state.last_request = 0
-
-
-def invoke_agent(prompt: str, session_id: str) -> dict:
-    """
-    Invoke the multi-agent research system via AWS Bedrock AgentCore Runtime.
+    Invoke the multi-agent research system via local FastAPI server.
 
     Args:
         prompt: User's research question
@@ -122,14 +99,112 @@ def invoke_agent(prompt: str, session_id: str) -> dict:
         dict: Parsed agent output containing report and metadata
 
     Raises:
-        NoCredentialsError: When AWS credentials are not configured
-        ClientError: When AWS API call fails
+        requests.exceptions.ConnectionError: When FastAPI server is not running
+        requests.exceptions.Timeout: When request takes too long
         Exception: For other unexpected errors
     """
-    client = get_bedrock_client()
-    agent_runtime_arn = get_config_value(
-        "AGENT_RUNTIME_ARN", "/app/config/AGENT_RUNTIME_ARN"
+    try:
+        # Check if API is healthy
+        health_response = requests.get(f"{LOCAL_API_URL}/health", timeout=2)
+        if health_response.status_code != 200:
+            raise Exception("API server is not healthy")
+
+        # Make request to local API
+        response = requests.post(
+            f"{LOCAL_API_URL}/query",
+            json={"user_query": prompt, "session_id": session_id},
+            timeout=1800,  # 30 minute timeout for research
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+
+            # Extract response and metrics
+            agent_response = result.get("response", "No response received")
+            metrics = result.get("metrics", {})
+
+            return {
+                "report": agent_response,
+                "papers_found": (
+                    metrics.get("papers_found", 0) if isinstance(metrics, dict) else 0
+                ),
+                "analysis_iterations": (
+                    metrics.get("iterations", 0) if isinstance(metrics, dict) else 0
+                ),
+                "agents_executed": [
+                    "Planner",
+                    "Searcher",
+                    "Analyzer",
+                    "Critique",
+                    "Reporter",
+                ],
+                "phase": result.get("phase", "COMPLETE"),
+            }
+        else:
+            error_detail = response.json().get("detail", response.text)
+            raise Exception(f"API Error {response.status_code}: {error_detail}")
+
+    except requests.exceptions.ConnectionError:
+        raise Exception(
+            f"Cannot connect to local API at {LOCAL_API_URL}. "
+            "Make sure the FastAPI server is running:\n"
+            "python middleware.py"
+        )
+    except requests.exceptions.Timeout:
+        raise Exception("Request timed out. The query may be too complex.")
+
+
+# ============================================================================
+# Production Mode - Call AWS AgentCore
+# ============================================================================
+
+
+@st.cache_resource
+def get_bedrock_client():
+    """
+    Initialize and cache the AWS Bedrock AgentCore client with retry config.
+    Only used in production mode.
+    """
+    import boto3
+    from botocore.config import Config
+
+    try:
+        from utils import get_config_value
+
+        aws_region = (
+            get_config_value("AWS_REGION", "/app/config/AWS_REGION") or "us-east-1"
+        )
+        agent_runtime_arn = get_config_value(
+            "AGENT_RUNTIME_ARN", "/app/config/AGENT_RUNTIME_ARN"
+        )
+    except ImportError:
+        aws_region = os.getenv("AWS_REGION", "us-east-1")
+        agent_runtime_arn = os.getenv("AGENT_RUNTIME_ARN")
+
+    config = Config(
+        retries={
+            "total_max_attempts": 5,
+            "mode": "adaptive",
+        },
+        connect_timeout=30,
+        read_timeout=300,
+        max_pool_connections=25,
     )
+
+    return (
+        boto3.client("bedrock-agentcore", region_name=aws_region, config=config),
+        agent_runtime_arn,
+    )
+
+
+def invoke_agent_production(prompt: str, session_id: str) -> dict:
+    """
+    Invoke the multi-agent research system via AWS Bedrock AgentCore Runtime.
+    Only used in production mode.
+    """
+    from botocore.exceptions import NoCredentialsError, ClientError
+
+    client, agent_runtime_arn = get_bedrock_client()
 
     if not agent_runtime_arn:
         raise ValueError("AGENT_RUNTIME_ARN environment variable is not set")
@@ -146,7 +221,7 @@ def invoke_agent(prompt: str, session_id: str) -> dict:
         agentRuntimeArn=agent_runtime_arn,
         runtimeSessionId=session_id,
         payload=payload,
-        qualifier="DEFAULT",  # Optional: specify a version/endpoint
+        qualifier="DEFAULT",
     )
 
     content = []
@@ -158,7 +233,6 @@ def invoke_agent(prompt: str, session_id: str) -> dict:
     try:
         response_data = json.loads(response_body)
     except json.JSONDecodeError:
-        # If response is not JSON, treat it as plain text report
         response_data = {"output": {"report": response_body}}
 
     output = response_data.get("output", {})
@@ -172,13 +246,62 @@ def invoke_agent(prompt: str, session_id: str) -> dict:
 
 
 # ============================================================================
-# Application UI
+# Unified invoke function - routes to local or production
+# ============================================================================
+
+
+def invoke_agent(prompt: str, session_id: str) -> dict:
+    """
+    Invoke the agent system - automatically routes to local or production.
+    """
+    if USE_LOCAL_MODE:
+        return invoke_agent_local(prompt, session_id)
+    else:
+        return invoke_agent_production(prompt, session_id)
+
+
+# ============================================================================
+# Session State Initialization
+# ============================================================================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+
+if "last_request" not in st.session_state:
+    st.session_state.last_request = 0
+
+
+# ============================================================================
+# Sidebar
 # ============================================================================
 
 with st.sidebar:
     st.header("🤖 Agent Status")
 
+    # Show mode
+    st.info(f"**Mode:** {MODE}")
+
+    if USE_LOCAL_MODE:
+        # Show API health status
+        try:
+            health_check = requests.get(f"{LOCAL_API_URL}/health", timeout=2)
+            if health_check.status_code == 200:
+                st.success("✅ Local API Connected")
+            else:
+                st.error("❌ Local API Error")
+        except:
+            st.error("❌ Local API Not Running")
+            st.caption(f"Start server: `python middleware.py`")
+
     st.caption(f"🔑 Session: `{st.session_state.session_id[:8]}...`")
+
+    if st.button("🔄 New Session", use_container_width=True):
+        st.session_state.session_id = str(uuid.uuid4())
+        st.session_state.messages = []
+        st.rerun()
 
     st.divider()
 
@@ -198,6 +321,7 @@ with st.sidebar:
     """
     )
 
+
 # ============================================================================
 # Main Content Area
 # ============================================================================
@@ -215,31 +339,28 @@ st.markdown(
     """
 )
 
+
 # ============================================================================
 # Chat Interface
 # ============================================================================
 
-# Loop through all messages in session state and display them
+# Display chat history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Display chat input and handle user messages
+# Chat input
 if prompt := st.chat_input("What research topic would you like to explore?"):
-    # Validate input before processing with error handling
+    # Validate input
     try:
         is_valid, error_message = is_valid_plain_text(prompt)
     except Exception as e:
-        # Log validation error for debugging
         logger.error(f"Input validation error: {str(e)}", exc_info=True)
-
-        # Fail open: allow input to proceed if validation encounters unexpected errors
         st.warning("⚠️ Input validation temporarily unavailable. Proceeding with query.")
         is_valid = True
         error_message = ""
 
     if not is_valid:
-        # Display error without adding to chat history
         st.error(
             f"""
 ❌ **Invalid Input**
@@ -257,31 +378,28 @@ if prompt := st.chat_input("What research topic would you like to explore?"):
 - "What are the latest developments in quantum computing?"
 """
         )
-        st.stop()  # Prevent further execution
+        st.stop()
 
-    # Simple MVP rate limiting
-    if time.time() - st.session_state.last_request < 300:
+    # Rate limiting (optional for local testing)
+    if not USE_LOCAL_MODE and time.time() - st.session_state.last_request < 300:
         st.warning("⚠️ Please wait 5 minutes between requests")
         st.stop()
 
-    # Update last request time
     st.session_state.last_request = time.time()
 
-    # Append user message to session state
+    # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # Display user message immediately
     with st.chat_message("user"):
         st.markdown(prompt)
 
+    # Process with agent
     with st.chat_message("assistant"):
         try:
             with st.sidebar:
-                # Use st.status() to show workflow progress
                 with st.status("🚀 Research workflow...", expanded=True) as status:
-                    # Display each agent with emojis and simulated delays
                     st.write("📋 **Planner Agent** - Generating research plan...")
-                    time.sleep(0.8)  # Simulated delay for visual feedback
+                    time.sleep(0.8)
 
                     st.write("🔍 **Searcher Agent** - Finding relevant papers...")
                     time.sleep(0.8)
@@ -293,18 +411,20 @@ if prompt := st.chat_input("What research topic would you like to explore?"):
                     time.sleep(0.8)
 
                     st.write("📝 **Reporter Agent** - Generating final report...")
-                    time.sleep(0.8)
 
+                    # Call the agent (local or production)
                     output = invoke_agent(prompt, st.session_state.session_id)
 
                     status.update(label="✅ Research completed!", state="complete")
 
+            # Show execution summary
             st.info(
                 f"""
 📊 **Execution Summary**
-- 📄 **Papers Found:** {output['papers_found']}
-- 🔄 **Analysis Iterations:** {output['analysis_iterations']}
-- 🤖 **Agents Used:** {', '.join(output['agents_executed']) if output['agents_executed'] else 'N/A'}
+- 📄 **Papers Found:** {output.get('papers_found', 'N/A')}
+- 🔄 **Analysis Iterations:** {output.get('analysis_iterations', 'N/A')}
+- 🤖 **Agents Used:** {', '.join(output.get('agents_executed', [])) if output.get('agents_executed') else 'N/A'}
+- 📍 **Phase:** {output.get('phase', 'COMPLETE')}
 """
             )
 
@@ -313,55 +433,19 @@ if prompt := st.chat_input("What research topic would you like to explore?"):
             final_report = output["report"]
             st.markdown(final_report)
 
-            # Add report to chat history
+            # Add to chat history
             st.session_state.messages.append(
                 {"role": "assistant", "content": final_report}
             )
 
-        except NoCredentialsError:
-            error_msg = """
-❌ **AWS Credentials Not Configured**
-
-Please configure your AWS credentials:
-
-1. Run: `aws configure`
-2. Or set environment variables:
-   - `AWS_ACCESS_KEY_ID`
-   - `AWS_SECRET_ACCESS_KEY`
-   - `AWS_REGION`
-"""
-            st.error(error_msg)
-            st.session_state.messages.append(
-                {"role": "assistant", "content": error_msg}
-            )
-
-        except ClientError as e:
-            error_code = e.response["Error"]["Code"]
-            error_message = e.response["Error"]["Message"]
-
-            # ADDED: Better error handling for throttling
-            if error_code == "ThrottlingException":
-                error_msg = """
-❌ **Rate Limit Exceeded**
-
-The system is temporarily busy. Please try again in a moment.
-
-💡 *The system automatically retries up to 5 times with exponential backoff.*
-"""
-            else:
-                error_msg = f"❌ **AWS Error ({error_code})**: {error_message}"
-
-            st.error(error_msg)
-            st.session_state.messages.append(
-                {"role": "assistant", "content": error_msg}
-            )
-
         except Exception as e:
-            error_msg = f"❌ **Unexpected Error**: {str(e)}"
+            error_msg = f"❌ **Error**: {str(e)}"
             st.error(error_msg)
+
             # Show full traceback in expander for debugging
             with st.expander("Show detailed error"):
                 st.exception(e)
+
             st.session_state.messages.append(
                 {"role": "assistant", "content": error_msg}
             )
