@@ -26,8 +26,7 @@
 7.  [Deployment Steps (Copilot Instructions)](#7-deployment-steps-copilot-instructions)
 8.  [Running a Research Task](#8-running-a-research-task)
 9.  [Directory Structure](#9-directory-structure)
-10. [Live Demo & Video](#10-live-demo--video)
-11. [Team](#11-team)
+10. [Team](#10-team)
 
 ---
 
@@ -45,33 +44,33 @@ Our solution, **The Autonomous Research Agent**, is designed to revolutionize th
 
 This system aims to transform the tedious literature review into an automated, transparent, and academically rigorous workflow, accelerating scientific discovery.
 
-## **2. Key Features & Requirements**
+## **2. Key Features & uirements**
 
-This project addresses key requirements for autonomous research, focusing on both the research outcome and the user experience:
+This project addresses key uirements for autonomous research, focusing on both the research outcome and the user experience:
 
-- **Autonomous & Comprehensive Research (Req 1, 3):**
+- **Autonomous & Comprehensive Research:**
   - Submits a query, receives a full literature review automatically.
   - Generates structured research plans and makes reasonable assumptions for ambiguous queries.
   - Queries multiple academic databases (arXiv, Semantic Scholar) and analyzes full-text content.
   - Filters irrelevant papers and identifies key methodologies, novel contributions, and comparative insights.
-- **Self-Critique & Iterative Refinement (Req 4):**
+- **Self-Critique & Iterative Refinement:**
   - Automatically critiques its own analysis for completeness and accuracy.
   - Conducts additional research to fill identified gaps and revises analysis until quality standards are met.
-- **Verifiable & Professional Reports (Req 5):**
+- **Verifiable & Professional Reports:**
   - Generates well-structured reports including executive summary, methodology review, comparative analysis, and future directions.
   - Provides proper academic citations with links to original papers.
   - Reports are stored in a downloadable Markdown format with metadata on the research process.
-- **Scalable, Resilient & Cost-Optimized (Req 6, 7):**
+- **Scalable, Resilient & Cost-Optimized:**
   - Fully serverless AWS architecture, scaling automatically for concurrent research sessions.
   - Maintains state persistence for long-running tasks, recovering from failures.
   - Caches processed content (e.g., extracted PDF text) for faster, cost-effective reuse.
   - Scales down to zero when idle to minimize costs.
-- **Secure & Private (Req 8):**
+- **Secure & Private:**
   - Encrypts all data at rest and in transit.
   - Uses secure access controls (e.g., presigned URLs) and implements authentication/authorization.
   - Maintains session-based data isolation with automatic cache expiration.
 
-## **3. The Glass Box: Real-time Transparency (Req 2)**
+## **3. The Glass Box: Real-time Transparency**
 
 A cornerstone of our design is the **"Glass Box" transparency system**. As a researcher, you'll have real-time visibility into the agent workflow.
 
@@ -488,12 +487,7 @@ This section provides instructions to deploy the entire Autonomous Research Agen
 └── LICENSE
 ```
 
-## **10. Live Demo & Video**
-
-- **Deployed Project URL:** [LINK TO YOUR DEPLOYED WEBSITE]
-- **Demo Video:** [LINK TO YOUR 3-MINUTE DEMO VIDEO]
-
-## **11. Team**
+## **10. Team**
 
 - **Prathamesh More**
 - **Yash Panchal**
