@@ -421,10 +421,10 @@ if prompt := st.chat_input("What research topic would you like to explore?"):
             st.info(
                 f"""
 📊 **Execution Summary**
-- 📄 **Papers Found:** {output.get('papers_found', 'N/A')}
-- 🔄 **Analysis Iterations:** {output.get('analysis_iterations', 'N/A')}
-- 🤖 **Agents Used:** {', '.join(output.get('agents_executed', [])) if output.get('agents_executed') else 'N/A'}
-- 📍 **Phase:** {output.get('phase', 'COMPLETE')}
+- 📄 **Papers Found:** {output.get("papers_found", "N/A")}
+- 🔄 **Analysis Iterations:** {output.get("analysis_iterations", "N/A")}
+- 🤖 **Agents Used:** {", ".join(output.get("agents_executed", [])) if output.get("agents_executed") else "N/A"}
+- 📍 **Phase:** {output.get("phase", "COMPLETE")}
 """
             )
 
@@ -432,7 +432,14 @@ if prompt := st.chat_input("What research topic would you like to explore?"):
             st.markdown("### 📄 Research Report")
             final_report = output["report"]
             st.markdown(final_report)
-
+            with st.expander("🔍 What Actually Happened"):
+                st.write(f"**Papers Found:** {output['papers_found']}")
+                st.write(
+                    f"**Papers Analyzed:** {output.get('papers_analyzed', 'Unknown')}"
+                )
+                st.write(f"**Analysis Errors:** {output.get('analysis_errors', 0)}")
+                st.write(f"**Critique Score:** {output.get('quality_score', 'N/A')}")
+                st.write(f"**Revisions:** {output.get('revision_count', 0)}")
             # Add to chat history
             st.session_state.messages.append(
                 {"role": "assistant", "content": final_report}

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 
 class SelectedPaper(BaseModel):
@@ -10,8 +10,10 @@ class SelectedPaper(BaseModel):
     authors: List[str] = Field(description="List of paper authors")
     abstract: str = Field(description="Full abstract of the paper")
     source: Literal["arxiv", "semantic_scholar"] = Field(description="Source database")
-    published_date: str = Field(description="Publication date in YYYY-MM-DD format")
-    pdf_url: str = Field(description="URL to the paper PDF")
+    published_date: Optional[str] = Field(
+        description="Publication date in YYYY-MM-DD format"
+    )
+    pdf_url: Optional[str] = Field(description="URL to the paper PDF")
     relevance_score: Literal["High", "Medium", "Low"] = Field(
         description="Relevance assessment"
     )

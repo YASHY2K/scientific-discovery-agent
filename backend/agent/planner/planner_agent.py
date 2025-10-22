@@ -60,6 +60,7 @@ Planner_Agent_prompt = """
         REMEMBER: Output ONLY the JSON object. No other text or explanation.
 """
 
+
 model_id = "us.anthropic.claude-3-5-sonnet-20240620-v1:0"  # Corrected Model ID
 model = BedrockModel(model_id=model_id)
 

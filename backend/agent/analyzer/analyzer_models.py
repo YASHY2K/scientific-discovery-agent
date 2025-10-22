@@ -1,19 +1,19 @@
 from pydantic import BaseModel, Field
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 from typing import List, Literal
 
 
 class PaperAnalysis(BaseModel):
-    s3_uri: str = Field(description="S3 URI where the paper is stored")
+    s3_chunks_path: str = Field(description="S3 URI where the paper is stored")
     title: str = Field(description="Extracted or inferred title of the paper")
     key_findings: List[str] = Field(
         description="List of key findings with supporting evidence"
     )
     methodology: str = Field(description="Description of research methods used")
     contributions: List[str] = Field(description="List of novel contributions")
-    limitations: str = Field(
+    limitations: Optional[List[str]] = Field(
         description="Identified limitations or gaps in the research"
     )
     relevance_score: Literal["High", "Medium", "Low"] = Field(

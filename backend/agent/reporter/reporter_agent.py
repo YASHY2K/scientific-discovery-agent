@@ -1,6 +1,7 @@
 """
 Reporter Agent - Research Report Generation
-Compiles analyses into comprehensive research reports.
+Compiles analyses into comprehensive research reports using a modular,
+section-by-section approach.
 """
 
 import logging
@@ -8,12 +9,11 @@ import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-from strands import Agent
+# CRITICAL: Import the @tool decorator and ToolContext
+from strands import Agent, tool, ToolContext
 from strands.models import BedrockModel
 
-from utils.reporter_helper import save_report
-
-# Enable debug logs
+# Enable debug logs (optional, but good for testing)
 logging.getLogger("strands").setLevel(logging.DEBUG)
 logging.basicConfig(
     format="%(levelname)s | %(name)s | %(message)s", handlers=[logging.StreamHandler()]
@@ -22,202 +22,241 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-REPORTER_SYSTEM_PROMPT = """You are a Technical Report Writer specializing in academic research synthesis.
+# ============================================================================
+# MODULAR PROMPTS
+# ============================================================================
 
-CRITICAL: All output MUST use ASCII characters only. Do not use emojis, special characters, or unicode symbols in your reports.
+# This is the base instruction given to ALL section-writing agents.
+REPORTER_BASE_PROMPT = """You are a Technical Report Writer specializing in academic research synthesis.
+Your role is to write ONE specific section of a larger report based on the data provided.
+You MUST follow all instructions for the specific section you are given.
+CRITICAL: All output MUST use ASCII characters only.
 
-Your role is to compile structured analyses into a comprehensive, well-formatted research report with the paper references cited using the paper urls.
+## IMPORTANT: Handling Incomplete Data
+- If the analysis contains errors or incomplete data, work with what you have.
+- Focus on extracting maximum value from successful analyses.
+- Do not apologize for missing data.
 
-## Report Structure
-
-Create a markdown report with these sections:
-
-### 1. Executive Summary
-- 3-4 paragraphs for general audience
-- Focus on key findings and their impact
-- Plain language, avoid jargon
-
-### 2. Introduction
-- Restate original research query in formal terms
-- Explain methodology and approach
-- Define scope and limitations
-
-### 3. Main Findings (One section per sub-topic)
-- Organized by the sub-topics from the research plan
-- Present key findings for each
-- Include quantitative results with tables if available
-- Support claims with evidence
-
-### 4. Cross-Study Synthesis
-- Identify common themes across papers
-- Note contradictions and explain them
-- Highlight methodological innovations
-- Discuss practical implications
-
-### 5. Research Gaps and Future Directions
-- Identify unanswered questions
-- Suggest areas for further research
-- Prioritize gaps by importance
-
-### 6. Conclusions
-- Summarize key takeaways (5-7 bullet points)
-- Practical implications for practitioners
-- Recommendations for implementation or future work
-
-### 7. References
-- Full bibliography in consistent format
-- Include all papers analyzed
-- Organized alphabetically
-- Paper urls must be included for each reference
-
-### 8. Appendix (Optional)
-- Search queries used
-- Selection criteria
-- Paper count by source
-- Quality metrics
-
-## Writing Guidelines
-
-- Use clear, professional academic tone
-- Define technical terms on first use
-- Use active voice where possible
-- Support all claims with citations
-- Organize information logically
-- Use headers to guide readers
-- Include transitions between sections
-
-## Output Format
-
-Return ONLY the markdown report text. Do NOT include any JSON or metadata.
-
-The report should be:
-- Complete and standalone (reader doesn't need other docs)
-- Well-formatted with proper markdown
-- Between 2000-4000 words
-- Professional and rigorous
-
-Begin writing the report now.
+## General Writing Guidelines
+- **Tone**: Professional, academic, and accessible. Assume an intelligent (but not expert) reader.
+- **Evidence**: Use the `quantitative_results` and `key_quotes` from the JSON data extensively. Cite specific metrics.
+- **Format**: Return ONLY the markdown for your assigned section. Do NOT include a section header (e.g., "## Executive Summary"), as this will be added later.
 """
+
+# This dictionary holds the specific instructions for each section.
+REPORTER_PROMPTS = {
+    "Executive Summary": REPORTER_BASE_PROMPT
+    + """
+## Your Current Task: Write the 'Executive Summary'
+- Aim for 5-6 paragraphs. This is the most important section for busy readers.
+- **Paragraph 1**: Broad context - why this topic matters.
+- **Paragraph 2**: What was investigated (the query) and how (the methodology).
+- **Paragraph 3**: Key finding 1, with supporting evidence/metrics.
+- **Paragraph 4**: Key finding 2, with supporting evidence/metrics.
+- **Paragraph 5**: Practical implications & high-level recommendations.
+- **Paragraph 6**: Future outlook / Conclusion.
+- **Output**: Start writing the summary directly (no header).
+""",
+    "Introduction": REPORTER_BASE_PROMPT
+    + """
+## Your Current Task: Write the 'Introduction'
+- Aim for 4-5 paragraphs.
+- **Paragraph 1**: Restate the original query in formal academic terms and provide background.
+- **Paragraph 2**: Explain why this question is important (practical impact, research gaps).
+- **Paragraph 3**: Describe the methodology used (e.g., "A systematic review was conducted... papers were sourced from...").
+- **Paragraph 4**: Define the scope of this report and acknowledge limitations upfront.
+- **Output**: Start writing the introduction directly (no header).
+""",
+    "Main Findings": REPORTER_BASE_PROMPT
+    + """
+## Your Current Task: Write the 'Main Findings'
+- This is the most detailed section.
+- For EACH sub-topic in the `research_plan.sub_topics`, create a sub-section (e.g., "### [Sub-topic Name]").
+- For EACH paper in the `analyses` for that sub-topic:
+  1.  **[Paper Title]** by [Authors], [Year]
+  2.  - **Core Contribution**: [1-2 sentences]
+  3.  - **Methodology**: [Detailed summary, including dataset/sample size if provided by Analyzer]
+  4.  - **Key Findings**: (List 2-3 findings, each supported by metrics, stats, or direct quotes from the data)
+  5.  - **Significance**: [Why this matters]
+  6.  - **Limitations**: [What the paper doesn't cover]
+- After listing the papers for a sub-topic, write a 2-3 paragraph **Synthesis** comparing/contrasting them.
+- **Output**: Start writing the findings directly (e.g., "### [Sub-topic Name]").
+""",
+    "Cross-Study Synthesis": REPORTER_BASE_PROMPT
+    + """
+## Your Current Task: Write the 'Cross-Study Synthesis'
+- This is a CRITICAL section. Aim for 5-6 paragraphs minimum. Go beyond just listing themes.
+- **Common Themes**: What patterns emerge across ALL sub-topics? (with examples)
+- **Contradictions**: Where do findings clash? Hypothesize *why* (e.g., "Paper A and B conflict; this is likely because Paper A used a synthetic dataset...").
+- **Methodological Comparison**: Directly compare the *methods* used. Which papers were more robust? What evaluation metrics were common?
+- **Evolution of Thinking**: How has the field progressed based on these papers?
+- **Practical Implications**: What does this all mean for real-world applications?
+- **Output**: Start writing the synthesis directly (no header).
+""",
+    "Research Gaps": REPORTER_BASE_PROMPT
+    + """
+## Your Current Task: Write the 'Research Gaps and Future Directions'
+- Aim for 3-4 detailed paragraphs.
+- **Current Limitations**: What's still unknown based on the analyses? Why does it matter?
+- **Emerging Questions**: What new questions arose from this research?
+- **Methodological Needs**: What new approaches or data are needed?
+- **Priority Ranking**: Which gaps are most important to address first?
+- **Output**: Start writing the research gaps directly (no header).
+""",
+    "Conclusion": REPORTER_BASE_PROMPT
+    + """
+## Your Current Task: Write the 'Conclusion'
+- **Summary Bullet Points**: (8-12 bullets, 1-2 sentences each with specific insights)
+- **For Practitioners** (dedicated paragraph): Actionable recommendations. What to do Monday morning.
+- **For Researchers** (dedicated paragraph): Future research directions. Open problems worth investigating.
+- **Output**: Start writing the conclusion directly (no header).
+""",
+}
 
 # ============================================================================
 # AGENT INITIALIZATION
 # ============================================================================
 
+# Define the model globally so our tools can access it
+# Note: Using Sonnet 3.5 for strong writing.
+# You can change this to match your orchestrator's model if needed.
+model = BedrockModel(
+    model_id="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+    temperature=0.5,
+)
+logger.info("Reporter model initialized")
 
-def initialize_reporter_agent():
-    """Initialize the reporter agent."""
-    logger.info("Initializing Reporter Agent...")
-
-    model_id = "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
-
-    model = BedrockModel(
-        model_id=model_id,
-        temperature=0.5,  # Slightly higher for more natural writing
-    )
-
-    reporter = Agent(model=model, system_prompt=REPORTER_SYSTEM_PROMPT)
-
-    logger.info("Reporter Agent initialized")
-    return reporter
-
-
-reporter_agent = initialize_reporter_agent()
 
 # ============================================================================
-# REPORT GENERATION
+# MODULAR TOOLS (To be imported by Orchestrator)
 # ============================================================================
 
 
-def generate_report(
-    original_query: str,
-    research_plan: Dict[str, Any],
-    analyses: Dict[str, Any],
-    critique_feedback: Optional[Dict[str, Any]] = None,
-) -> str:
+@tool(context=True)
+def write_report_section_tool(section_name: str, tool_context: ToolContext) -> str:
     """
-    Generate comprehensive research report.
-
-    Args:
-        original_query: Original research question
-        research_plan: Plan from planner agent
-        analyses: Analyses from analyzer agent {subtopic_id: analysis}
-        critique_feedback: Optional feedback from critique agent
-
-    Returns:
-        Markdown formatted report as string
+    Writes a single, specific section of the final research report.
+    Valid section_name values are: 'Executive Summary', 'Introduction',
+    'Main Findings', 'Cross-Study Synthesis', 'Research Gaps', 'Conclusion'.
     """
-    if reporter_agent is None:
-        logger.error("Reporter agent not initialized")
-        return "Error: Reporter agent not initialized"
-
     try:
-        logger.info("Generating research report")
+        tool_context.agent.state.set("phase", f"REPORTING: {section_name}")
+        logger.info(f"Writing report section: {section_name}")
 
-        # Build report generation prompt
-        report_prompt = f"""Generate a comprehensive research report based on this research analysis.
+        # 1. Get the specific prompt for this section
+        section_system_prompt = REPORTER_PROMPTS.get(section_name)
+        if not section_system_prompt:
+            raise ValueError(f"No prompt found for section: {section_name}")
 
-ORIGINAL RESEARCH QUERY:
-{original_query}
+        # 2. Get all the data the reporter needs from state
+        user_query = tool_context.agent.state.get("user_query", "")
+        research_plan = tool_context.agent.state.get("research_plan", {})
+        analyses = tool_context.agent.state.get("analyses", {})
+        critique_results = tool_context.agent.state.get("critique_results", {})
 
-RESEARCH PLAN:
-{json.dumps(research_plan, indent=2)}
+        # 3. Create a temporary, "stateless" agent with this specific prompt
+        section_agent = Agent(model=model, system_prompt=section_system_prompt)
 
-ANALYSES (by sub-topic):
-{json.dumps(analyses, indent=2)}
+        # 4. Create the user prompt, containing only the data
+        section_data_prompt = f"""
+        Here is the data you must use to write your section:
+        
+        - Original Query: {user_query}
+        - Research Plan: {json.dumps(research_plan, indent=2)}
+        - Analyses: {json.dumps(analyses, indent=2)}
+        - Critique: {json.dumps(critique_results, indent=2)}
+        
+        Begin writing your assigned section. Remember, do NOT output a header.
+        """
 
-{"CRITIQUE FEEDBACK:" + json.dumps(critique_feedback, indent=2) if critique_feedback else ""}
+        # 5. Call the agent. This call is small and efficient.
+        response = section_agent(section_data_prompt)
 
-Create a professional markdown report that synthesizes all this information into a coherent narrative.
-The report should be complete, well-structured, and suitable for academic or professional audiences.
+        # Extract the text content from the message
+        section_content = ""
+        for block in response.message.content:
+            if block.type == "text":
+                section_content += block.text
 
-Start writing the report now:
-"""
+        # 6. Save this section's content into state
+        generated_sections = tool_context.agent.state.get("generated_sections", {})
+        generated_sections[section_name] = section_content
+        tool_context.agent.state.set("generated_sections", generated_sections)
 
-        # Call reporter agent
-        logger.info("Calling reporter agent for report generation")
-        result = reporter_agent(report_prompt)
-
-        logger.info("Report generation complete")
-        return str(result)
+        logger.info(f"Successfully generated section: {section_name}")
+        return f"Successfully generated section: {section_name}"
 
     except Exception as e:
-        logger.error(f"Report generation error: {e}")
-        return f"Error generating report: {str(e)}"
+        logger.error(f"Error in reporting section {section_name}: {str(e)}")
+        raise
+
+
+@tool(context=True)
+def finalize_report_tool(tool_context: ToolContext) -> str:
+    """
+    Assembles all generated report sections into the final, complete markdown document.
+    This should be the very last tool called.
+    """
+    try:
+        tool_context.agent.state.set("phase", "FINALIZING")
+        logger.info("Finalizing full report...")
+
+        generated_sections = tool_context.agent.state.get("generated_sections", {})
+
+        # Define the order of the report
+        section_order = [
+            "Executive Summary",
+            "Introduction",
+            "Main Findings",
+            "Cross-Study Synthesis",
+            "Research Gaps",
+            "Conclusion",
+        ]
+
+        final_report_parts = []
+
+        # Add a title
+        user_query = tool_context.agent.state.get("user_query", "Research Report")
+        final_report_parts.append(f"# Research Report: {user_query}\n")
+
+        for section_name in section_order:
+            section_content = generated_sections.get(section_name)
+
+            # Add section title
+            final_report_parts.append(f"\n## {section_name}\n")
+
+            if section_content:
+                final_report_parts.append(section_content)
+            else:
+                final_report_parts.append("*(This section was not generated)*")
+
+        final_report = "\n".join(final_report_parts)
+
+        # Save to state and return the final string
+        tool_context.agent.state.set("final_report", final_report)
+        tool_context.agent.state.set("phase", "COMPLETE")
+
+        logger.info("Final report assembled.")
+        return final_report
+
+    except Exception as e:
+        logger.error(f"Error in finalize_report_tool: {str(e)}")
+        raise
 
 
 # ============================================================================
-# PUBLIC INTERFACE
+# LEGACY FUNCTIONS (No longer used by orchestrator)
 # ============================================================================
 
 
-def report(
-    original_query: str,
-    research_plan: Dict[str, Any],
-    analyses: Dict[str, Any],
-    critique_feedback: Optional[Dict[str, Any]] = None,
-    save_to_file: bool = False,
-) -> str:
+def report(*args, **kwargs):
     """
-    Public interface for generating research report.
-
-    Args:
-        original_query: Original research question
-        research_plan: Plan from planner agent
-        analyses: Analyses from analyzer agent
-        critique_feedback: Optional feedback from critique
-        save_to_file: Whether to save report to file
-
-    Returns:
-        Markdown report text (or filename if saved)
+    Legacy function, no longer called by the chunked orchestrator.
     """
-    report_text = generate_report(
-        original_query, research_plan, analyses, critique_feedback
+    logger.warning(
+        "Legacy report function called. This should not happen in chunked mode."
     )
-
-    if save_to_file:
-        return save_report(report_text)
-
-    return report_text
+    return "Error: Legacy report function called."
 
 
 # ============================================================================
@@ -225,235 +264,8 @@ def report(
 # ============================================================================
 
 if __name__ == "__main__":
-    # Example usage
-    test_query = "Deep learning approaches for semantic segmentation: comparing architectural innovations"
-
-    test_plan = {
-        "research_approach": "comparative_analysis",
-        "sub_topics": [
-            {
-                "id": "adaptive_network_architectures",
-                "description": "Novel approaches to handling scale variance and task-specific adaptation in segmentation",
-                "priority": 1,
-                "success_criteria": "At least 8-10 papers on dynamic or adaptive architectures",
-                "search_guidance": {
-                    "focus_on": "Architectural innovations for handling variable inputs, data-dependent routing, task-adaptive mechanisms",
-                    "must_include": "Quantitative results on Cityscapes or PASCAL datasets, computational efficiency metrics",
-                    "avoid": "Generic segmentation architectures without adaptive properties, theoretical work without empirical validation",
-                },
-            },
-            {
-                "id": "few_shot_learning_segmentation",
-                "description": "Methods for semantic segmentation with limited labeled data",
-                "priority": 1,
-                "success_criteria": "At least 6-8 papers on few-shot or meta-learning for segmentation",
-                "search_guidance": {
-                    "focus_on": "Few-shot learning protocols, meta-learning approaches, parameter efficiency, PASCAL-5i benchmark results",
-                    "must_include": "1-shot and 5-shot performance metrics, comparison with baseline methods",
-                    "avoid": "Image classification few-shot methods, theoretical meta-learning without segmentation application",
-                },
-            },
-            {
-                "id": "computational_efficiency",
-                "description": "Trade-offs between accuracy and computational cost in modern segmentation architectures",
-                "priority": 2,
-                "success_criteria": "At least 5-6 papers discussing FLOPs, parameters, inference time, or efficiency-accuracy trade-offs",
-                "search_guidance": {
-                    "focus_on": "Parameter efficiency, computational budgets, inference latency, model compression, hardware deployment",
-                    "must_include": "Specific numbers: FLOPs counts, parameter counts, runtime measurements",
-                    "avoid": "Efficiency claims without quantitative measurements, only theoretical complexity analysis",
-                },
-            },
-        ],
-    }
-
-    test_analyses = {
-        "adaptive_network_architectures": {
-            "sub_topic_id": "adaptive_network_architectures",
-            "papers_analyzed": 8,
-            "papers_analyzed_count": 8,
-            "analyzed_papers": [
-                {
-                    "paper_id": "2003.10401v1",
-                    "title": "Learning Dynamic Routing for Semantic Segmentation",
-                    "authors": ["Yanwei Li", "Lin Song", "Yukang Chen", "Zeming Li"],
-                    "findings_relevant_to_criteria": [
-                        {
-                            "criterion": "Architectural innovations for handling variable inputs",
-                            "finding": "Proposes soft conditional gate for data-dependent forward path selection",
-                            "evidence": "Achieves 5.8% improvement over DeepLab V3 on Cityscapes with similar computational budget (45G FLOPs)",
-                        },
-                        {
-                            "criterion": "Computational efficiency metrics",
-                            "finding": "Reduces computational cost to 37.6% of maximum with Dynamic-A configuration",
-                            "evidence": "FLOPs reduced from 71.6G (Dynamic-Raw) to 44.9G (Dynamic-A) with only 0.6% accuracy drop",
-                        },
-                        {
-                            "criterion": "Quantitative results on Cityscapes",
-                            "finding": "Achieves 80.7% mIoU on Cityscapes test set when combined with PSP module",
-                            "evidence": "Outperforms Auto-Deep Lab (80.4%) with fewer parameters and computational overhead",
-                        },
-                    ],
-                    "limitations": "Mainly evaluated on Cityscapes; limited exploration of real-time deployment scenarios",
-                },
-                {
-                    "paper_id": "2010.11437v1",
-                    "title": "Task-Adaptive Feature Transformer for Few-Shot Segmentation",
-                    "authors": [
-                        "Jun Seo",
-                        "Young-Hyun Park",
-                        "Sung-Whan Yoon",
-                        "Jaekyun Moon",
-                    ],
-                    "findings_relevant_to_criteria": [
-                        {
-                            "criterion": "Task-adaptive mechanisms",
-                            "finding": "Uses meta-learned reference vectors with linear transformation to adapt features to task",
-                            "evidence": "Achieves state-of-the-art on PASCAL-5i with only 4,096 additional parameters for 1-way segmentation",
-                        },
-                        {
-                            "criterion": "Parameter efficiency",
-                            "finding": "Requires minimal learnable parameters compared to competitors",
-                            "evidence": "TAFT: 4,096 params vs SG-One: 1.8M, CANet: 1.2M, PGNet: significantly more",
-                        },
-                    ],
-                    "limitations": "Does not provide FLOPs analysis; limited computational cost discussion",
-                },
-            ],
-            "cross_topic_synthesis": {
-                "common_themes": [
-                    "Both papers address reducing parameters while maintaining or improving accuracy",
-                    "Focus on practical efficiency: parameter count, computational budget, real-world feasibility",
-                ],
-                "contradictions": [
-                    "Dynamic Routing focuses on architectural flexibility; TAFT focuses on feature transformation",
-                    "Different design philosophy: routing vs. adaptation",
-                ],
-                "research_gaps": [
-                    "Limited direct comparison between dynamic routing and task-adaptive approaches",
-                    "Few papers combine both approaches",
-                    "Mobile/edge deployment considerations largely unexplored",
-                ],
-            },
-            "technical_summary": "Recent advances in semantic segmentation emphasize adaptive mechanisms to handle diverse inputs. Dynamic routing enables data-dependent path selection for scale variance, while task-adaptive transformers convert features to task-agnostic spaces. Both achieve significant parameter efficiency.",
-            "confidence_metrics": {
-                "analysis_completeness": 0.82,
-                "data_quality": 0.88,
-                "synthesis_confidence": 0.79,
-                "overall_confidence": 0.83,
-            },
-        },
-        "few_shot_learning_segmentation": {
-            "sub_topic_id": "few_shot_learning_segmentation",
-            "papers_analyzed": 7,
-            "papers_analyzed_count": 7,
-            "analyzed_papers": [
-                {
-                    "paper_id": "2010.11437v1",
-                    "title": "Task-Adaptive Feature Transformer for Few-Shot Segmentation",
-                    "findings_relevant_to_criteria": [
-                        {
-                            "criterion": "5-shot performance metrics",
-                            "finding": "Achieves 63.5% mIoU on PASCAL-5i 5-shot segmentation",
-                            "evidence": "Outperforms PGNet (58.5%) and CANet (57.1%) by significant margins (5.0-6.4% absolute gain)",
-                        },
-                        {
-                            "criterion": "1-shot performance metrics",
-                            "finding": "Achieves 52.1% mIoU on PASCAL-5i 1-shot segmentation",
-                            "evidence": "Binary IoU metric shows 70.0% for 1-shot, state-of-the-art on this metric",
-                        },
-                        {
-                            "criterion": "Meta-learning protocol",
-                            "finding": "Uses episodic meta-learning with support and query sets",
-                            "evidence": "Reference vectors meta-learned and updated per episode, enabling task conditioning",
-                        },
-                    ],
-                    "limitations": "1-shot mIoU slightly lower than CANet and PGNet on some splits; primarily evaluated on PASCAL-5i only",
-                }
-            ],
-            "cross_topic_synthesis": {
-                "common_themes": [
-                    "Meta-learning approaches essential for few-shot adaptation",
-                    "Prototype-based methods show competitive results",
-                    "PASCAL-5i is standard benchmark",
-                ],
-                "contradictions": [],
-                "research_gaps": [
-                    "Limited papers on few-shot segmentation with other datasets",
-                    "Few comparisons with transfer learning baselines",
-                    "Real-world scenarios (different domains, object types) unexplored",
-                ],
-            },
-            "technical_summary": "Few-shot segmentation remains challenging, with TAFT showing strong 5-shot results but more modest 1-shot performance. Meta-learning and prototype-based approaches dominate the field.",
-            "confidence_metrics": {
-                "analysis_completeness": 0.65,
-                "data_quality": 0.72,
-                "synthesis_confidence": 0.68,
-                "overall_confidence": 0.68,
-            },
-        },
-        "computational_efficiency": {
-            "sub_topic_id": "computational_efficiency",
-            "papers_analyzed": 5,
-            "papers_analyzed_count": 5,
-            "analyzed_papers": [
-                {
-                    "paper_id": "2003.10401v1",
-                    "title": "Learning Dynamic Routing for Semantic Segmentation",
-                    "findings_relevant_to_criteria": [
-                        {
-                            "criterion": "FLOPs counts and trade-offs",
-                            "finding": "Dynamic routing achieves FLOPs reduction with maintained accuracy",
-                            "evidence": "Dynamic-A: 44.9G FLOPs vs Deep Lab V3 modeled: 42.5G, with 1.6% accuracy gain (71.6% to 72.8%)",
-                        },
-                        {
-                            "criterion": "Parameter efficiency",
-                            "finding": "Parameters scale appropriately with model size",
-                            "evidence": "Dynamic models: 4.1-4.5M params vs static architectures: 2.9-6.1M",
-                        },
-                    ],
-                    "limitations": "Does not report inference time; focus is on training FLOPs rather than deployment metrics",
-                },
-                {
-                    "paper_id": "2010.11437v1",
-                    "title": "Task-Adaptive Feature Transformer for Few-Shot Segmentation",
-                    "findings_relevant_to_criteria": [
-                        {
-                            "criterion": "Parameter efficiency for few-shot",
-                            "finding": "TAFT adds minimal parameters to existing architectures",
-                            "evidence": "Only 4,096 parameters for 1-way segmentation; easily plugged into DeepLab V3+",
-                        }
-                    ],
-                    "limitations": "No FLOPs analysis; no inference latency measurements; efficiency gains focus purely on parameter count",
-                },
-            ],
-            "cross_topic_synthesis": {
-                "common_themes": [
-                    "Parameter efficiency is achievable without significant accuracy loss",
-                    "Modular approaches (plugging into existing architectures) are effective",
-                ],
-                "contradictions": [],
-                "research_gaps": [
-                    "CRITICAL: No inference latency or real-time deployment metrics",
-                    "CRITICAL: No memory usage analysis (peak memory, cache requirements)",
-                    "CRITICAL: No hardware-specific analysis (GPU/TPU/CPU deployment)",
-                    "No comparison with model quantization or pruning approaches",
-                    "Limited analysis of energy efficiency for edge devices",
-                ],
-            },
-            "technical_summary": "Training efficiency is well-studied, but deployment efficiency remains understudied. Papers focus on FLOPs and parameters but lack inference latency, memory usage, and hardware considerations critical for real-world deployment.",
-            "confidence_metrics": {
-                "analysis_completeness": 0.55,
-                "data_quality": 0.70,
-                "synthesis_confidence": 0.60,
-                "overall_confidence": 0.62,
-            },
-        },
-    }
-
-    result = report(test_query, test_plan, test_analyses, save_to_file=False)
-
-    print("Generated Report:")
-    print("=" * 80)
-    print(result)
-    print("=" * 80)
+    # This file is intended to be imported as a module, not run directly.
+    print("Reporter.py is a module and is ready to be imported by the orchestrator.")
+    print("It provides the following tools:")
+    print("- write_report_section_tool")
+    print("- finalize_report_tool")

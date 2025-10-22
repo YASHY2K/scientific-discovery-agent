@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 # CRITIQUE AGENT SYSTEM PROMPT
 # ============================================================================
 
+# critique_agent.py - Update CRITIQUE_SYSTEM_PROMPT
+
 CRITIQUE_SYSTEM_PROMPT = """You are a Research Quality Assurance Specialist.
 
 IMPORTANT: All output MUST use ASCII characters only. Do not use emojis, special characters, or unicode symbols.

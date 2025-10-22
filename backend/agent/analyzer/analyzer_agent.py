@@ -41,6 +41,7 @@ SSM_PARAMETERS_MAP = {
 # AGENT SYSTEM PROMPT
 # ============================================================================
 
+
 ANALYZER_SYSTEM_PROMPT = """You are a Scientific Paper Analysis Agent. Your mission is to analyze processed research papers and extract key insights, methodologies, findings, and contributions.
 
 IMPORTANT: All output MUST use ASCII characters only. Do not use emojis, special characters, or unicode symbols.
@@ -135,14 +136,13 @@ Your final output MUST be a single, valid JSON object matching this structure:
 
 Execute this workflow systematically for each paper provided.
 """
-
 # ============================================================================
 # S3 DOCUMENT DOWNLOAD TOOL
 # ============================================================================
 
 
 @tool
-def download_s3_document(s3_uri: str) -> str:
+def download_s3_document(s3_chunks_path: str) -> str:
     """
     Download a document from S3 using its URI.
 
@@ -154,7 +154,7 @@ def download_s3_document(s3_uri: str) -> str:
     """
     global s3_client
 
-    logger.info(f"(Tool) Downloading document from S3: {s3_uri}")
+    logger.info(f"(Tool) Downloading document from S3: {s3_chunks_path}")
 
     # Ensure S3 client is initialized
     if s3_client is None:
@@ -164,19 +164,21 @@ def download_s3_document(s3_uri: str) -> str:
 
     try:
         # Parse S3 URI
-        if not s3_uri.startswith("s3://"):
+        if not s3_chunks_path.startswith("s3://"):
             return json.dumps(
-                {"error": f"Invalid S3 URI format. Must start with 's3://': {s3_uri}"}
+                {
+                    "error": f"Invalid S3 URI format. Must start with 's3://': {s3_chunks_path}"
+                }
             )
 
         # Remove 's3://' prefix and split bucket and key
-        path = s3_uri[5:]
+        path = s3_chunks_path[5:]
         parts = path.split("/", 1)
 
         if len(parts) != 2:
             return json.dumps(
                 {
-                    "error": f"Invalid S3 URI format. Expected 's3://bucket/key': {s3_uri}"
+                    "error": f"Invalid S3 URI format. Expected 's3://bucket/key': {s3_chunks_path}"
                 }
             )
 
@@ -188,7 +190,9 @@ def download_s3_document(s3_uri: str) -> str:
 
         # Read content
         content = response["Body"].read().decode("utf-8")
-        logger.info(f"(Success) Downloaded {len(content)} characters from {s3_uri}")
+        logger.info(
+            f"(Success) Downloaded {len(content)} characters from {s3_chunks_path}"
+        )
 
         return content
 
@@ -199,7 +203,10 @@ def download_s3_document(s3_uri: str) -> str:
 
         if error_code == "NoSuchKey":
             return json.dumps(
-                {"error": f"Document not found at {s3_uri}", "details": error_msg}
+                {
+                    "error": f"Document not found at {s3_chunks_path}",
+                    "details": error_msg,
+                }
             )
         elif error_code == "NoSuchBucket":
             return json.dumps(
@@ -208,7 +215,7 @@ def download_s3_document(s3_uri: str) -> str:
         elif error_code == "AccessDenied":
             return json.dumps(
                 {
-                    "error": f"Access denied to {s3_uri}. Check IAM role permissions.",
+                    "error": f"Access denied to {s3_chunks_path}. Check IAM role permissions.",
                     "details": error_msg,
                 }
             )
