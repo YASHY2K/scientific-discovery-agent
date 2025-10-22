@@ -5,18 +5,6 @@ from typing import List, Dict, Any
 from strands import Agent, tool, ToolContext
 from strands.models import BedrockModel
 
-# from backend.agent.utils.utils import (
-#     get_ssm_parameter,
-#     put_ssm_parameter,
-#     enrich_papers_with_s3_paths,
-# )
-# from backend.agent.utils.agentcore_memory import (
-#     AgentCoreMemoryHook,
-#     memory_client,
-#     ACTOR_ID,
-#     SESSION_ID,
-#     create_or_get_memory_resource,
-# )
 
 from bedrock_agentcore.runtime import (
     BedrockAgentCoreApp,
@@ -66,7 +54,7 @@ Your role is to coordinate a comprehensive research workflow through multiple ph
   - Proceed to Phase 4 (Reporting)
 
 **IF REVISE:**
-  - Check revision count < MAX_REVISION_CYCLES (2)
+  - Check revision count < MAX_REVISION_CYCLES (1)
   - Execute required revisions based on critique feedback
   - Re-run critique
   - If MAX_REVISION_CYCLES reached, force approve
@@ -110,8 +98,8 @@ Be concise but informative. Show progress without overwhelming detail.
 
 If any tool fails:
 - Log the error clearly
-- Attempt recovery if possible
-- Inform user of issues
+- Attempt recovery if possible once
+- Dont inform user of issues
 - Continue workflow if non-critical
 
 ## Tool Usage Rules
@@ -554,64 +542,7 @@ def invoke(payload):
     return response
 
 
+z
+
 if __name__ == "__main__":
-    import sys
-    import logging
-    import io
-
-    # Set up UTF-8 encoding for output
-    if sys.platform.startswith("win"):
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-
-    # Enable debug logging
-    logging.getLogger("strands").setLevel(logging.DEBUG)
-    logging.basicConfig(
-        format="%(levelname)s | %(name)s | %(message)s",
-        handlers=[logging.StreamHandler()],
-    )
-
-    # Test query
-    user_query = {"user_query": "Compare YOLO and resnet models"}
-
-    print(f"\n{'=' * 60}", flush=True)
-    print("Testing Orchestrator with query:", flush=True)
-    print(f"{user_query}", flush=True)
-    print(f"{'=' * 60}\n", flush=True)
-
-    try:
-        # Execute orchestrator
-        response = invoke(user_query)
-
-        # Print results
-        print(f"\n{'=' * 60}", flush=True)
-        print("RESPONSE:", flush=True)
-        print(f"{'=' * 60}", flush=True)
-
-        # Handle Unicode characters safely
-        message = response.message
-        if isinstance(message, str):
-            # Replace Unicode emoji with ASCII alternatives
-            message = (
-                message.replace("✅", "[OK]")
-                .replace("❌", "[X]")
-                .replace("⚠️", "[!]")
-                .replace("📝", "[*]")
-                .encode("ascii", "replace")
-                .decode("ascii")
-            )
-
-        print(message, flush=True)
-
-        # Print metrics
-        print(f"\n{'=' * 60}", flush=True)
-        print("METRICS:", flush=True)
-        print(f"{'=' * 60}", flush=True)
-
-        metrics_summary = response.metrics.get_summary()
-        if isinstance(metrics_summary, str):
-            metrics_summary = metrics_summary.encode("ascii", "replace").decode("ascii")
-        print(metrics_summary, flush=True)
-
-    except Exception as e:
-        print(f"\nError executing orchestrator: {str(e)}", flush=True)
-        raise
+    app.run()

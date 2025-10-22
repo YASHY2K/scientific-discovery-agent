@@ -49,7 +49,7 @@ You MUST follow these steps in order. DO NOT skip any steps.
 - Use relevant keywords from the user's request. Be adaptive and try different queries if the first search yields poor results.
 
 ### Step 2: Selection & Processing Phase (CRITICAL)
-- From the combined search results, select the **top 3 to 5 most relevant papers**.
+- From the combined search results, select the **top 1 to 3 most relevant papers**.
 - For **each** of these selected papers, you MUST call the `PaperProcessing___paper_processing` tool one time with its `pdf_url`.
 - This step is mandatory and must be completed before generating the final output.
 
@@ -60,7 +60,7 @@ You MUST follow these steps in order. DO NOT skip any steps.
 ## Tool Specifications
 
 1. **Arxiv___search_arxiv**
-   - Input: `{"body": {"query": "your search terms", "limit": 15}}`
+   - Input: `{"body": {"query": "your search terms", "limit": 5}}`
 
 2. **SemanticScholar___search_semantic_scholar**
    - Input: `{"body": {"query": "your search terms", "action": "search_paper"}}`
@@ -76,7 +76,7 @@ Your final output MUST be a single, valid JSON object matching this structure ex
 {
   "sub_topic_id": "from input or 'general_search'",
   "search_iterations": 2,
-  "total_papers_found": 25,
+  "total_papers_found": 10,
   "selected_papers": [
     {
       "id": "arxiv:2401.12345 or s2:paper_id",
@@ -257,7 +257,7 @@ def format_search_query(
 WORKFLOW REMINDER:
 1. Call Arxiv___search_arxiv tool to search arXiv preprints
 2. Call SemanticScholar___search_semantic_scholar tool to search peer-reviewed papers
-3. Select the top 3-5 most relevant papers from combined results
+3. Select the top 1-2 most relevant papers from combined results
 4. For EACH selected paper, call PaperProcessing___paper_processing with its pdf_url
 5. Return results in the specified JSON format with accurate papers_processed count
 
