@@ -8,6 +8,7 @@ import logging
 import json
 import boto3
 from botocore.exceptions import ClientError
+from botocore.config import Config
 from typing import Optional
 
 # AWS Strands imports
@@ -17,6 +18,9 @@ from strands.models import BedrockModel
 from utils.analyzer_helper import initialize_s3_client
 from .analyzer_models import AnalysisResponse
 
+_Config = Config(
+    read_timeout=120, retries={"total_max_attempts": 1, "mode": "adaptive"}
+)
 
 # Enable debug logs
 logging.getLogger("strands").setLevel(logging.DEBUG)
@@ -100,7 +104,7 @@ Your final output MUST be a single, valid JSON object matching this structure:
         "Novel contribution 1",
         "Novel contribution 2"
       ],
-      "limitations": "Identified limitations or gaps",
+      "limitations": ["Identified limitations or gaps"],
       "relevance_score": "High/Medium/Low",
       "key_quotes": [
         "Important quote 1",
@@ -294,7 +298,7 @@ def initialize_analyzer_agent():
 
     # Configure model
     model_id = "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
-    model = BedrockModel(model_id=model_id, temperature=0.3)
+    model = BedrockModel(model_id=model_id, temperature=0.3, boto_client_config=_Config)
 
     # Create the agent with S3 download tool
     all_tools = [download_s3_document]

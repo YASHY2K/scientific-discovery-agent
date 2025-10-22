@@ -542,7 +542,5 @@ def invoke(payload):
     return response
 
 
-z
-
 if __name__ == "__main__":
     app.run()
