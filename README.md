@@ -1,5 +1,9 @@
 # 🔬 The Autonomous Research Agent
 
+> **Last Updated:** January 21, 2025  
+> **Status:** Production Deployment  
+> **Version:** 1.0
+
 **A collaborative multi-agent AI system that automates comprehensive literature reviews to accelerate scientific innovation, built on AWS Strands Agents and Amazon Bedrock.**
 
 ![AWS AI Agent Global Hackathon](https://img.shields.io/badge/Hackathon-AWS%20AI%20Agent%20Global-orange)
@@ -69,148 +73,374 @@ This project addresses key requirements for autonomous research, focusing on bot
 
 ## **3. The Glass Box: Real-time Transparency (Req 2)**
 
-A cornerstone of our design is the **"Glass Box" transparency system**. As a researcher, you'll have real-time visibility into every thought and action of the AI agents.
+A cornerstone of our design is the **"Glass Box" transparency system**. As a researcher, you'll have real-time visibility into the agent workflow.
 
-- **Live Activity Stream:** See a timeline of all agent activities directly in the frontend.
-- **Reasoning Display:** Understand _why_ an agent made a particular decision or chose a specific tool.
-- **Tool Invocation Details:** View which deterministic tools are being called, their input parameters, and their raw results.
-- **Complete Audit Trail:** A full record of the agent's workflow is preserved, building trust and enabling verification.
+- **Live Activity Stream:** See a timeline of agent activities in the Streamlit sidebar as the workflow progresses.
+- **Phase Tracking:** Watch as the system moves through Planning → Search → Analysis → Critique → Reporting phases.
+- **Execution Summary:** View metrics including papers found, analysis iterations, agents executed, and quality scores.
+- **Complete Audit Trail:** The orchestrator maintains full state history using Strands' `ToolContext`, preserving all decisions and results.
 
-This "Glass Box" is powered by **AWS SNS** and **API Gateway WebSockets**, streaming events from the backend to the frontend.
+The transparency system leverages **Bedrock AgentCore's built-in observability** combined with Streamlit's real-time UI updates to provide visibility into the multi-agent workflow.
 
 ## **4. How It Works: The Multi-Agent Architecture**
 
-Our system employs a sophisticated **hierarchical multi-agent architecture** managed by **AWS Strands Agents SDK**.
+Our system employs a sophisticated **hierarchical multi-agent architecture** managed by **AWS Strands Agents SDK** and hosted on **AWS Bedrock AgentCore Runtime**.
 
 ```mermaid
-graph TD
-    A[Orchestrator Agent] --> B[Research Planner Agent]
-    A --> C[Paper Searcher Agent]
-    A --> D[Paper Analyzer Agent]
-    A --> E[Research Critique Agent]
-    A --> F[Report Generator Agent]
+graph TB
+    User[User via Streamlit] --> Runtime[AgentCore Runtime]
+    Runtime --> Orch[Orchestrator Agent]
+    Orch --> Gateway[AgentCore Gateway]
+    Gateway --> Tools[Lambda Tools]
+    Tools --> S3[S3 Storage]
 
-    C --> G[ArXiv Search Tool]
-    C --> H[Semantic Scholar Tool]
-    D --> J[PDF Extractor Tool]
-    D --> K[Semantic Search Tool]
-    F --> L[Citation Lookup Tool]
+    subgraph "Specialist Agents (via @tool decorators)"
+        Planner[Planner Agent]
+        Searcher[Searcher Agent]
+        Analyzer[Analyzer Agent]
+        Critique[Critique Agent]
+        Reporter[Reporter Agent]
+    end
+
+    Orch -.->|@tool calls| Planner
+    Orch -.->|@tool calls| Searcher
+    Orch -.->|@tool calls| Analyzer
+    Orch -.->|@tool calls| Critique
+    Orch -.->|@tool calls| Reporter
+
+    subgraph "Lambda Tools (via MCP)"
+        SearchArxiv[search_arxiv]
+        SearchSS[search_semantic_scholar]
+        AcquirePaper[acquire_paper]
+        ExtractContent[extract_content]
+        PreprocessText[preprocess_text]
+    end
+
+    Gateway --> SearchArxiv
+    Gateway --> SearchSS
+    Gateway --> AcquirePaper
+    Gateway --> ExtractContent
+    Gateway --> PreprocessText
 ```
 
 **Key Architectural Principles:**
 
-- **Orchestrator Agent (The Research Lead):** This primary agent, powered by Claude 3.5 Sonnet, receives user queries. It acts as a project manager, dynamically delegating tasks to specialist agents, managing the overall workflow, and handling feedback loops (e.g., from the Critique Agent). It uses specialist agents as "intelligent tools" via the Strands A2A (Agent-to-Agent) protocol.
+- **AgentCore Runtime (The Execution Platform):** All agents run within AWS Bedrock AgentCore Runtime, a fully managed service that handles agent hosting, state management, and execution. The runtime is deployed using `BedrockAgentCoreApp` and provides built-in observability and scaling.
 
-- **Specialist Agents (The Experts):** Five dedicated agents, each with its own Claude 3.5 Sonnet LLM and system prompt, possess distinct domain expertise:
+- **Orchestrator Agent (The Research Lead):** This primary agent, powered by Claude Sonnet 4, receives user queries via the runtime's entrypoint. It acts as a project manager, dynamically delegating tasks to specialist agents using the `@tool` decorator pattern. The orchestrator manages the overall workflow through five phases: Planning → Search → Analysis → Critique → Reporting.
 
-  - **Research Planner Agent:** Develops the research strategy and search plan.
-  - **Paper Searcher Agent:** Executes searches across academic databases, refining queries intelligently.
-  - **Paper Analyzer Agent:** Performs deep technical analysis of paper content.
-  - **Research Critique Agent:** Acts as quality assurance, evaluating completeness and accuracy, requesting revisions.
-  - **Report Generator Agent:** Compiles findings into the final, structured report.
+- **Specialist Agents (The Experts):** Five dedicated agents, each implemented as a separate Python module with its own system prompt and execution logic:
 
-- **Deterministic Tools (The Reliable Workers):** These are serverless AWS Lambda functions that perform specific, reliable tasks without reasoning. Agents choose when and how to invoke these tools. Examples include `arxiv_search_tool`, `pdf_text_extractor`, `semantic_search_tool`, and `citation_lookup_tool`. Each tool is a separate Lambda for isolation and independent scaling.
+  - **Research Planner Agent:** Develops the research strategy and decomposes queries into sub-topics
+  - **Paper Searcher Agent:** Executes searches across academic databases (arXiv, Semantic Scholar)
+  - **Paper Analyzer Agent:** Performs deep technical analysis of paper content
+  - **Research Critique Agent:** Acts as quality assurance, evaluating completeness and accuracy
+  - **Report Generator Agent:** Compiles findings into the final, structured markdown report
 
-- **Serverless Backbone:** All components—including agent runtimes, tools, storage, APIs, and messaging—are implemented using fully managed AWS serverless services (AWS Lambda, DynamoDB, S3, API Gateway, SNS, Bedrock AgentCore), ensuring maximum scalability, resilience, and cost-efficiency.
+  The orchestrator exposes each specialist agent as a callable tool using Strands' `@tool(context=True)` decorator, enabling agent-to-agent communication with shared state via `ToolContext`.
+
+- **Deterministic Tools (The Reliable Workers):** These are serverless AWS Lambda functions that perform specific, reliable tasks without reasoning. Agents access these tools through the **AgentCore Gateway** using the **Model Context Protocol (MCP)**. Each tool is a separate Lambda for isolation and independent scaling:
+
+  - `search_arxiv` - Search arXiv database
+  - `search_semantic_scholar` - Search Semantic Scholar API
+  - `acquire_paper` - Download paper PDFs
+  - `extract_content` - Extract text from PDFs
+  - `preprocess_text` - Clean and prepare text for analysis
+
+- **State Management:** The orchestrator maintains workflow state using Strands' `ToolContext.agent.state` system, tracking research plans, paper metadata, analyses, critique results, and revision counts across the entire workflow.
+
+- **Serverless Architecture:** The system leverages fully managed AWS services for maximum scalability and cost-efficiency:
+  - **AgentCore Runtime** hosts all agents
+  - **AgentCore Gateway** provides secure MCP endpoints for tools
+  - **Lambda** executes deterministic tools
+  - **S3** stores paper cache and reports
+  - **Cognito** handles OAuth authentication for gateway access
 
 ## **5. Technology Stack**
 
-- **AI & Orchestration:** AWS Strands Agents SDK (v1.0+), Amazon Bedrock AgentCore
-- **Foundation Model:** Anthropic Claude 3.5 Sonnet (via Amazon Bedrock)
-- **Embeddings:** Amazon Titan Embeddings V2 (via Amazon Bedrock)
-- **Backend Compute:** AWS Lambda (Python 3.11)
-- **Data Storage:** Amazon DynamoDB (Research Tasks, WebSocket Connections), Amazon S3 (Cache Bucket, Reports Bucket)
-- **API Layer:** Amazon API Gateway (REST API for requests, WebSocket API for real-time updates)
-- **Messaging:** Amazon SNS (Agent event stream)
-- **Frontend:** React, Vite, Ant Design (for UI components), Tailwind CSS
-- **Infrastructure as Code:** AWS CDK (Cloud Development Kit)
-- **Monitoring & Observability:** Amazon CloudWatch, AWS X-Ray, Bedrock AgentCore Observability Service
+- **AI & Orchestration:** AWS Strands Agents SDK (v1.0+), AWS Bedrock AgentCore Runtime (agent hosting platform), AWS Bedrock AgentCore Gateway (MCP tool access)
+- **Foundation Models:**
+  - Anthropic Claude Sonnet 4 (`us.anthropic.claude-sonnet-4-20250514-v1:0`) - Orchestrator Agent
+  - Anthropic Claude 3.5 Sonnet (`anthropic.claude-3-5-sonnet-20240620-v1:0`) - Reporter Agent
+- **Backend Compute:**
+  - AWS Bedrock AgentCore Runtime (hosts all Strands agents)
+  - AWS Lambda (Python 3.11) - Deterministic tools only (search_arxiv, search_semantic_scholar, acquire_paper, extract_content, preprocess_text)
+- **Data Storage:** Amazon S3 (paper cache, research reports)
+- **Authentication:** Amazon Cognito (OAuth authorizer for AgentCore Gateway)
+- **Frontend:** Streamlit (Python-based web interface)
+- **Monitoring & Observability:** Amazon CloudWatch, AWS X-Ray, Bedrock AgentCore built-in observability
 
-## **6. Project Setup & Local Development (Copilot Instructions)**
+## **6. Project Setup & Local Development**
 
-This section guides you (and Copilot!) through setting up the project locally for development and testing.
+This section guides you through setting up the project locally for development and testing.
 
-### **6.1. Prerequisites (Check these first)**
+### **6.1. Prerequisites**
 
-- **AWS Account & AWS CLI:** Configured with credentials and sufficient permissions to deploy Bedrock, Lambda, DynamoDB, S3, API Gateway, SNS.
-  - **Copilot Instruction:** Verify `aws configure` is set up and `aws sts get-caller-identity` returns your user/role.
-- **Bedrock Model Access:** Ensure your AWS account has access to `anthropic.claude-3-5-sonnet-v1` and `amazon.titan-embed-text-v2` in the Bedrock console.
-  - **Copilot Instruction:** If access is not granted, guide the user to request it in the Bedrock service settings.
+- **AWS Account & AWS CLI:** Configured with credentials and sufficient permissions to deploy Bedrock AgentCore, Lambda, S3, and Cognito.
+  - Verify: `aws configure` is set up and `aws sts get-caller-identity` returns your user/role.
+- **Bedrock Model Access:** Ensure your AWS account has access to:
+  - `us.anthropic.claude-sonnet-4-20250514-v1:0` (Orchestrator)
+  - `anthropic.claude-3-5-sonnet-20240620-v1:0` (Reporter)
+  - Request access in the Bedrock console if needed.
 - **Python 3.11+ & Pip:**
-  - **Copilot Instruction:** Verify `python --version` and `pip --version`.
-- **Node.js 18+ & npm:**
-  - **Copilot Instruction:** Verify `node --version` and `npm --version`.
-- **AWS CDK CLI:**
-  - **Copilot Instruction:** Verify `cdk --version`. If not installed, suggest `npm install -g aws-cdk`.
+  - Verify: `python --version` and `pip --version`
+- **bedrock_agentcore_starter_toolkit:**
+  - Install: `pip install bedrock-agentcore-starter-toolkit`
 
-### **6.2. Backend Setup (Copilot, follow these steps!)**
+### **6.2. AgentCore Gateway Setup**
 
-1. **Create Lambda Layer for Dependencies:**
+The AgentCore Gateway provides secure MCP endpoints for Lambda tools. Follow the setup guide in `backend/acgw/README.md`:
 
-   - **Copilot Instruction:** Navigate to the project root. Create the directory `layers/dependencies/python`.
-   - **Copilot Instruction:** Install core Python dependencies into the layer: `pip install strands-agents boto3 arxiv PyPDF2 requests simplejson python-dotenv -t layers/dependencies/python`.
-   - **Copilot Instruction:** Ensure `layers/dependencies/python` contains the installed packages.
+1. **Create Gateway with Cognito Authorizer:**
 
-2. **Initialize AWS CDK:**
+   ```python
+   from bedrock_agentcore_starter_toolkit.operations.gateway.client import GatewayClient
 
-   - **Copilot Instruction:** Navigate to the `cdk` directory.
-   - **Copilot Instruction:** If this is the first time using CDK in this account/region, run `cdk bootstrap aws://YOUR_AWS_ACCOUNT_ID/YOUR_AWS_REGION` (replace placeholders).
+   client = GatewayClient(region_name="us-east-1")
 
-3. **Synthesize CDK Templates:**
+   # Create Cognito authorizer
+   cognito_response = client.create_oauth_authorizer_with_cognito("ResearchAgentGW")
 
-   - **Copilot Instruction:** From the `cdk` directory, run `cdk synth` to generate CloudFormation templates. Review the output for any errors.
+   # Create MCP Gateway
+   gateway = client.create_mcp_gateway(
+       authorizer_config=cognito_response["authorizer_config"]
+   )
+   ```
 
-4. **Local Testing of Agent Logic (before full AWS deployment):**
-   - **Copilot Instruction:** In `src/main_agent_handler.py`, temporarily set `self.memory_service` and `self.observer` to simple in-memory objects or mocks if `bedrock_agentcore` requires deployed services.
-   - **Copilot Instruction:** Create a temporary `src/run_local_test.py` file with code to instantiate `ResearchAgentSystem` and call `process_research_request` with a sample query, e.g., `asyncio.run(agent_system.process_research_request("Explain Tree of Thoughts prompting.", "local_test_session"))`.
-   - **Copilot Instruction:** Run `python src/run_local_test.py` and verify agent thoughts and tool calls are printed to the console.
-   - **Copilot Instruction:** Remove `src/run_local_test.py` after verification.
+2. **Register Lambda Tools as Gateway Targets:**
 
-### **6.3. Frontend Setup (Copilot, follow these steps!)**
+   For each Lambda tool (search_arxiv, search_semantic_scholar, acquire_paper, extract_content, preprocess_text):
+
+   ```python
+   lambda_target = client.create_mcp_gateway_target(
+       gateway=gateway,
+       target_type="lambda"
+   )
+   ```
+
+3. **Grant Lambda Invoke Permissions:**
+
+   Each Lambda must allow the Gateway's IAM role to invoke it:
+
+   ```bash
+   aws lambda add-permission \
+     --function-name search_arxiv \
+     --statement-id AllowAgentCoreGateway \
+     --action lambda:InvokeFunction \
+     --principal bedrock.amazonaws.com
+   ```
+
+   Repeat for all tool Lambda functions.
+
+### **6.3. AgentCore Runtime Deployment**
+
+Deploy the agent system to AgentCore Runtime:
+
+1. **Navigate to Agent Directory:**
+
+   ```bash
+   cd backend/agent
+   ```
+
+2. **Deploy to AgentCore Runtime:**
+
+   The `orchestrator.py` file contains the `BedrockAgentCoreApp` definition:
+
+   ```python
+   app = BedrockAgentCoreApp()
+
+   @app.entrypoint
+   def invoke(payload):
+       user_query = payload.get("user_query", "No query provided.")
+       orchestrator_agent = Agent(
+           model=model,
+           system_prompt=ORCHESTRATOR_PROMPT,
+           tools=[planner_tool, searcher_tool, analyzer_tool,
+                  critique_tool, write_report_section_tool, finalize_report_tool]
+       )
+       response = orchestrator_agent(user_query)
+       return response
+   ```
+
+   Deploy using the AgentCore deployment tools or AWS CLI. Note the **Agent Runtime ARN** for frontend configuration.
+
+3. **Configure Gateway Access:**
+
+   Update the agent configuration to use your deployed Gateway's MCP endpoint for tool access.
+
+### **6.4. Lambda Tool Deployment**
+
+Deploy each deterministic tool as a separate Lambda function:
+
+1. **Package Tool Dependencies:**
+
+   ```bash
+   cd backend/tools
+   pip install -r requirements.txt -t package/
+   cd package && zip -r ../tool_layer.zip .
+   ```
+
+2. **Deploy Lambda Functions:**
+
+   Deploy each tool (search_arxiv, search_semantic_scholar, acquire_paper, extract_content, preprocess_text) as a separate Lambda function with Python 3.11 runtime.
+
+3. **Configure S3 Access:**
+
+   Ensure Lambda execution roles have permissions to read/write to the S3 cache bucket.
+
+### **6.5. Frontend Setup (Streamlit)**
 
 1. **Navigate to Frontend Directory:**
 
-   - **Copilot Instruction:** `cd frontend/`
+   ```bash
+   cd frontend
+   ```
 
 2. **Install Dependencies:**
 
-   - **Copilot Instruction:** `npm install`
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-3. **Configure API Endpoints:**
+3. **Configure Environment Variables:**
 
-   - **Copilot Instruction:** Create a `.env.local` file in the frontend directory.
-   - **Copilot Instruction:** Once the backend is deployed (see Section 7), populate `.env.local` with the actual API Gateway URLs. For now, use placeholders: `VITE_API_REST_URL=YOUR_REST_API_GATEWAY_URL` and `VITE_API_WS_URL=YOUR_WEB_SOCKET_API_GATEWAY_URL`.
+   Create a `.env` file in the frontend directory:
+
+   ```bash
+   # For local testing with middleware
+   USE_LOCAL_MODE=true
+   LOCAL_API_URL=http://localhost:8000
+
+   # For production deployment
+   # USE_LOCAL_MODE=false
+   # AWS_REGION=us-east-1
+   # AGENT_RUNTIME_ARN=arn:aws:bedrock:us-east-1:ACCOUNT:agent-runtime/RUNTIME_ID
+   ```
 
 4. **Run Local Development Server:**
-   - **Copilot Instruction:** `npm run dev`
-   - **Copilot Instruction:** The application will be available at `http://localhost:5173`. Expect some backend connectivity errors until deployment.
 
-## **7. Deployment Steps (Copilot Instructions)**
+   ```bash
+   streamlit run app.py
+   ```
+
+   The application will be available at `http://localhost:8501`.
+
+### **6.6. Local Testing with Middleware (Optional)**
+
+For local development without deploying to AWS:
+
+1. **Start the FastAPI middleware:**
+
+   ```bash
+   cd backend
+   python middleware.py
+   ```
+
+2. **Configure frontend for local mode:**
+
+   Set `USE_LOCAL_MODE=true` in `frontend/.env`
+
+3. **Run Streamlit:**
+
+   ```bash
+   cd frontend
+   streamlit run app.py
+   ```
+
+## **7. Deployment Steps**
 
 This section provides instructions to deploy the entire Autonomous Research Agent system to your AWS account.
 
-### **7.1. Deploy Backend Infrastructure**
+### **7.1. Deploy AgentCore Gateway**
 
-1. **Ensure CDK Bootstrap:**
+1. **Run Gateway Setup Script:**
 
-   - **Copilot Instruction:** Verify CDK has been bootstrapped for your account/region (see 6.2 Backend Setup step 2).
+   Follow the instructions in `backend/acgw/README.md` to create the Gateway with Cognito authentication.
 
-2. **Deploy the Stack:**
-   - **Copilot Instruction:** Navigate to the `cdk` directory.
-   - **Copilot Instruction:** Run `cdk deploy ResearchAgentStack --all --require-approval never`.
-   - **Copilot Instruction:** Note down the outputs, especially `ResearchApiEndpoint` and `WebSocketApiEndpoint` as these will be needed for the frontend.
+2. **Register Lambda Tools:**
 
-### **7.2. Deploy Frontend to S3/CloudFront**
+   Register each tool Lambda as a Gateway target using the `bedrock_agentcore_starter_toolkit`.
 
-1. **Build Frontend:**
+3. **Note Gateway Endpoint:**
 
-   - **Copilot Instruction:** Navigate to the `frontend` directory.
-   - **Copilot Instruction:** Run `npm run build`.
+   Save the Gateway's MCP endpoint URL for agent configuration.
 
-2. **Deploy to S3:**
-   - **Copilot Instruction:** Update the `frontend_s3_bucket_name` in your `cdk/research_agent_stack.py` to match an S3 bucket name created during `cdk deploy` (e.g., `research-agent-frontend-bucket-<random-suffix>`).
-   - **Copilot Instruction:** Run `aws s3 sync build/ s3://YOUR_FRONTEND_S3_BUCKET_NAME --delete` (replace `YOUR_FRONTEND_S3_BUCKET_NAME`).
-   - **Copilot Instruction:** Once deployed, locate the CloudFront distribution URL associated with your frontend bucket for accessing the application.
+### **7.2. Deploy Lambda Tools**
+
+1. **Package and Deploy Each Tool:**
+
+   Deploy the following Lambda functions:
+
+   - `search_arxiv`
+   - `search_semantic_scholar`
+   - `acquire_paper`
+   - `extract_content`
+   - `preprocess_text`
+
+2. **Configure IAM Permissions:**
+
+   Grant Gateway invoke permissions to each Lambda (see Section 6.2).
+
+3. **Create S3 Buckets:**
+
+   Create S3 buckets for paper cache and research reports. Update Lambda environment variables with bucket names.
+
+### **7.3. Deploy AgentCore Runtime**
+
+1. **Deploy Agent Application:**
+
+   Deploy the `orchestrator.py` application to AgentCore Runtime using the Bedrock console or AWS CLI.
+
+2. **Configure Gateway Access:**
+
+   Update the agent configuration with your Gateway's MCP endpoint.
+
+3. **Note Runtime ARN:**
+
+   Save the Agent Runtime ARN for frontend configuration.
+
+### **7.4. Deploy Frontend (Streamlit)**
+
+**Option A: Deploy to AWS (EC2, ECS, or App Runner)**
+
+1. **Build Docker Image:**
+
+   ```bash
+   cd frontend
+   docker build -t research-agent-frontend .
+   ```
+
+2. **Deploy to AWS:**
+
+   Deploy the container to your preferred AWS compute service (EC2, ECS, App Runner).
+
+3. **Configure Environment:**
+
+   Set environment variables:
+
+   ```bash
+   USE_LOCAL_MODE=false
+   AWS_REGION=us-east-1
+   AGENT_RUNTIME_ARN=<your-runtime-arn>
+   ```
+
+**Option B: Run Locally**
+
+1. **Configure Production Mode:**
+
+   Update `frontend/.env`:
+
+   ```bash
+   USE_LOCAL_MODE=false
+   AGENT_RUNTIME_ARN=<your-runtime-arn>
+   ```
+
+2. **Run Streamlit:**
+
+   ```bash
+   cd frontend
+   streamlit run app.py
+   ```
 
 ## **8. Running a Research Task**
 
@@ -223,34 +453,38 @@ This section provides instructions to deploy the entire Autonomous Research Agen
 
 ```
 .
-├── .github/                       # GitHub Actions workflows, etc. (if applicable)
-├── .vscode/                       # VS Code settings
-├── cdk/                           # AWS CDK Infrastructure as Code
-│   └── research_agent_stack.py    # Defines all AWS resources
-├── layers/                        # Lambda Layers for shared dependencies
-│   └── dependencies/
-│       └── python/                # Python packages (Strands SDK, boto3, arxiv, PyPDF2 etc.)
-├── src/                           # Backend Python source code
-│   ├── main_agent_handler.py      # Contains ResearchAgentSystem, all Strands agent definitions
-│   ├── lambda_handler.py          # Main AWS Lambda handler for REST/WebSocket events
-│   ├── websocket_handler.py       # Lambda for SNS-to-WebSocket relay
-│   └── tools/                     # Deterministic tools implementations
-│       ├── __init__.py
-│       └── deterministic_tools.py # @tool decorated functions (e.g., arxiv_search_tool, pdf_text_extractor, semantic_search_tool, citation_lookup_tool)
-├── frontend/                      # React frontend application
-│   ├── public/
-│   ├── src/
-│   │   ├── components/
-│   │   │   └── GlassBox.tsx       # React component for real-time visualization
-│   │   ├── App.tsx
-│   │   └── index.tsx
-│   ├── package.json
-│   └── vite.config.ts
-├── assets/                        # Images, diagrams, etc.
-│   └── architecture.png           # System architecture diagram
+├── backend/                       # Backend Python source code
+│   ├── agent/                     # Agent implementations (deployed to AgentCore Runtime)
+│   │   ├── orchestrator.py        # Main orchestrator with BedrockAgentCoreApp
+│   │   ├── planner/               # Planner agent module
+│   │   ├── searcher/              # Searcher agent module
+│   │   ├── analyzer/              # Analyzer agent module
+│   │   ├── critique/              # Critique agent module
+│   │   └── reporter/              # Reporter agent module (integrated in orchestrator)
+│   ├── acgw/                      # AgentCore Gateway setup
+│   │   └── README.md              # Gateway configuration guide
+│   ├── tools/                     # Lambda tool implementations
+│   │   ├── search_arxiv/          # ArXiv search Lambda
+│   │   ├── search_semantic_scholar/ # Semantic Scholar search Lambda
+│   │   ├── acquire_paper/         # Paper download Lambda
+│   │   ├── extract_content/       # PDF extraction Lambda
+│   │   └── preprocess_text/       # Text preprocessing Lambda
+│   ├── shared/                    # Shared utilities
+│   └── misc/                      # Miscellaneous scripts
+├── frontend/                      # Streamlit frontend application
+│   ├── app.py                     # Main Streamlit application
+│   ├── utils.py                   # Frontend utilities
+│   ├── requirements.txt           # Python dependencies
+│   ├── Dockerfile                 # Container configuration
+│   └── test_*.py                  # Frontend tests
+├── docs/                          # Documentation
+│   ├── architecture.md            # High-level architecture
+│   └── comprehensive.md           # Detailed implementation guide
+├── .kiro/                         # Kiro IDE configuration
+│   └── specs/                     # Feature specifications
 ├── .gitignore
 ├── README.md                      # Project README
-├── requirements.txt               # Top-level Python dependencies for local env (optional, layers are preferred)
+├── requirements.txt               # Top-level Python dependencies
 └── LICENSE
 ```
 
@@ -263,3 +497,68 @@ This section provides instructions to deploy the entire Autonomous Research Agen
 
 - **Prathamesh More**
 - **Yash Panchal**
+
+---
+
+## **12. Implementation Status & Roadmap**
+
+### ✅ Current Implementation (v1.0)
+
+**Core Features:**
+
+- Multi-agent orchestration with AWS Bedrock AgentCore Runtime
+- Five specialist agents (Planner, Searcher, Analyzer, Critique, Reporter)
+- Secure tool access via AgentCore Gateway with MCP protocol
+- Lambda-based deterministic tools (search, acquire, extract, preprocess)
+- S3 caching for processed papers
+- Streamlit web interface with phase tracking
+- Cognito OAuth authentication
+- CloudWatch observability
+
+**Production Services:**
+
+- ✅ AWS Bedrock AgentCore Runtime (agent hosting)
+- ✅ AWS Bedrock AgentCore Gateway (MCP tool access)
+- ✅ AWS Lambda (5 tool functions)
+- ✅ Amazon S3 (paper cache and reports)
+- ✅ Amazon Cognito (OAuth authentication)
+- ✅ Amazon CloudWatch (logging and monitoring)
+- ✅ AWS Systems Manager (configuration storage)
+- ✅ Streamlit (frontend interface)
+
+### 🚧 Planned Enhancements (v2.0)
+
+**Real-Time Transparency:**
+
+- WebSocket API for live agent thought streaming
+- Interactive visualization of agent decision-making
+- SNS event publishing for workflow milestones
+
+**Advanced Features:**
+
+- DynamoDB persistent state for long-running tasks
+- Multi-region deployment for global scale
+- Batch processing queue for multiple queries
+- Cost analytics dashboard
+- Customizable report templates
+- Interactive mid-execution feedback
+
+**Quality Improvements:**
+
+- Automated fact-checking integration
+- Citation verification system
+- Multi-language support
+- Enhanced error recovery
+
+### ❌ Not Implemented
+
+The following features were considered but **not implemented** in v1.0:
+
+- **API Gateway REST API**: Direct AgentCore invocation used instead
+- **DynamoDB State Tables**: In-memory ToolContext sufficient for current use cases
+- **SNS/WebSocket Real-Time Updates**: CloudWatch logs and Streamlit polling used instead
+- **React Frontend**: Streamlit chosen for rapid development
+- **CloudFront CDN**: Single-endpoint deployment sufficient
+- **Step Functions**: AgentCore Runtime handles orchestration
+
+These may be reconsidered for future versions based on user feedback and scale requirements.

@@ -1,30 +1,43 @@
 # Multi-Agent Research System: Architecture & Implementation
 
+> **Last Updated:** January 21, 2025  
+> **Implementation Status:** Production deployment on AWS Bedrock AgentCore Runtime  
+> **Document Version:** 2.0
+
+> **Note:** This document describes the agent architecture and implementation details. For a complete system overview including deployment and infrastructure, see [docs/architecture.md](../../docs/architecture.md) and [docs/comprehensive.md](../../docs/comprehensive.md).
+
 ## Executive Summary
 
-This document defines the architecture for an autonomous AI research agent system built for the AWS AI Agent Global Hackathon. The system uses a "Smart Specialists" design pattern where an orchestrator coordinates five intelligent specialist agents, each with distinct responsibilities. The system is built on AWS Strands Agents SDK and uses Amazon Bedrock for LLM reasoning.
+This document defines the architecture for an autonomous AI research agent system built for the AWS AI Agent Global Hackathon. The system uses a "Smart Specialists" design pattern where an orchestrator coordinates five intelligent specialist agents, each with distinct responsibilities. The system is built on **AWS Strands Agents SDK** and uses **Amazon Bedrock** for LLM reasoning.
+
+**Deployment Model:** All agents are hosted and executed within **AWS Bedrock AgentCore Runtime** as a single application deployed using the `BedrockAgentCoreApp` framework. Agents access deterministic Lambda tools through the **AWS Bedrock AgentCore Gateway** using the Model Context Protocol (MCP).
 
 ## Core Design Principles
 
 ### 1. Agent vs Tool Distinction
 
 **Agents (Non-Deterministic, Reasoning Entities):**
+
 - Use LLMs to make decisions
 - Have autonomy within their domain
 - Can adapt strategies based on context
 - Example: SearcherAgent decides which queries to try and when to stop
 
 **Tools (Deterministic Functions):**
+
 - Pure functions with no reasoning
 - Same input always produces same output
 - No decision-making capability
-- Example: `arxiv_search_tool(query)` always returns same papers for same query
+- Implemented as AWS Lambda functions
+- Accessed by agents through the **AWS Bedrock AgentCore Gateway** using MCP (Model Context Protocol)
+- Example: `search_arxiv` Lambda function always returns same papers for same query
 
-**Critical Architecture Rule:** Specialist agents are exposed as "tools" to the orchestrator via the Agent-to-Agent (A2A) protocol, but internally they remain full agents with reasoning capabilities.
+**Critical Architecture Rule:** Specialist agents are exposed as "tools" to the orchestrator via the `@tool` decorator pattern in the Strands SDK, but internally they remain full agents with reasoning capabilities. Deterministic Lambda tools are accessed through the AgentCore Gateway for secure, authenticated invocation.
 
 ### 2. Separation of Concerns
 
 Each agent has a clearly defined domain of expertise:
+
 - **Planner:** Strategic research design
 - **Searcher:** Literature discovery tactics
 - **Analyzer:** Technical synthesis
@@ -41,21 +54,24 @@ No agent should reason about another agent's domain.
 **Role:** Project manager and workflow coordinator
 
 **Responsibilities:**
+
 - Receive and interpret user research queries
-- Coordinate specialist agents through A2A protocol
+- Coordinate specialist agents through `@tool` decorator pattern
 - Manage iteration loops based on critique feedback
-- Track progress and maintain session state
+- Track progress and maintain session state using ToolContext
 - Send real-time updates to frontend (Glass Box)
 
 **Tools Available:**
-- `planner_tool` (PlannerAgent via A2A)
-- `searcher_tool` (SearcherAgent via A2A)
-- `analyzer_tool` (AnalyzerAgent via A2A)
-- `critique_tool` (CritiqueAgent via A2A)
-- `reporter_tool` (ReporterAgent via A2A)
+
+- `planner_tool` (PlannerAgent via `@tool` decorator)
+- `searcher_tool` (SearcherAgent via `@tool` decorator)
+- `analyzer_tool` (AnalyzerAgent via `@tool` decorator)
+- `critique_tool` (CritiqueAgent via `@tool` decorator)
+- `reporter_tool` (ReporterAgent via `@tool` decorator)
 - `notify_user` (deterministic function)
 
 **System Prompt Key Points:**
+
 ```
 You are the Chief Research Orchestrator managing a team of specialist agents.
 
@@ -73,6 +89,7 @@ Always notify user of progress at each major step.
 ```
 
 **Decision Logic:**
+
 - Determines if query needs planning or can go straight to search
 - Decides when to move between workflow phases
 - Handles iteration termination (max 3 cycles or exhausted sources)
@@ -84,6 +101,7 @@ Always notify user of progress at each major step.
 **Role:** Research strategist and decomposition specialist
 
 **Responsibilities:**
+
 - Analyze complex research queries
 - Decompose into logical sub-topics
 - Provide starting keywords for each sub-topic (suggestions, not commands)
@@ -93,6 +111,7 @@ Always notify user of progress at each major step.
 **Tools Available:** None (pure reasoning agent)
 
 **Input Format:**
+
 ```json
 {
   "user_query": "Impact of transformer models on time-series forecasting"
@@ -100,6 +119,7 @@ Always notify user of progress at each major step.
 ```
 
 **Output Format:**
+
 ```json
 {
   "research_approach": "comparative_analysis",
@@ -109,27 +129,40 @@ Always notify user of progress at each major step.
       "description": "Traditional time-series forecasting (ARIMA, LSTM)",
       "priority": 1,
       "success_criteria": "5-8 papers on pre-transformer methods",
-      "suggested_keywords": ["ARIMA forecasting", "LSTM time series", "traditional forecasting methods"]
+      "suggested_keywords": [
+        "ARIMA forecasting",
+        "LSTM time series",
+        "traditional forecasting methods"
+      ]
     },
     {
       "id": "transformer_architectures",
       "description": "How transformers adapted for time-series",
       "priority": 2,
       "success_criteria": "10+ papers on transformer architectures",
-      "suggested_keywords": ["transformer time series", "temporal fusion transformer", "attention forecasting"]
+      "suggested_keywords": [
+        "transformer time series",
+        "temporal fusion transformer",
+        "attention forecasting"
+      ]
     },
     {
       "id": "empirical_comparison",
       "description": "Benchmark studies comparing approaches",
       "priority": 3,
       "success_criteria": "Papers with quantitative results",
-      "suggested_keywords": ["transformer vs LSTM", "forecasting benchmark", "time series comparison"]
+      "suggested_keywords": [
+        "transformer vs LSTM",
+        "forecasting benchmark",
+        "time series comparison"
+      ]
     }
   ]
 }
 ```
 
 **System Prompt Key Points:**
+
 ```
 You are a Research Planning Specialist.
 
@@ -142,13 +175,14 @@ When NOT to create sub-topics:
 - Simple, focused queries ("latest CRISPR papers")
 - Query already specific
 
-Your suggested_keywords are STARTING POINTS only. The SearcherAgent 
+Your suggested_keywords are STARTING POINTS only. The SearcherAgent
 has autonomy to deviate if those keywords prove unproductive.
 
 Always provide clear success criteria so other agents know when enough work is done.
 ```
 
 **Key Behavior:**
+
 - Does NOT specify exact search queries (that's SearcherAgent's job)
 - Does NOT know about data sources (arXiv vs Semantic Scholar)
 - Focuses on WHAT to research, not HOW to search
@@ -160,6 +194,7 @@ Always provide clear success criteria so other agents know when enough work is d
 **Role:** Literature discovery and curation specialist
 
 **Responsibilities:**
+
 - Execute searches across academic databases
 - Iteratively refine queries based on result quality
 - Filter and rank papers by relevance
@@ -167,14 +202,18 @@ Always provide clear success criteria so other agents know when enough work is d
 - Acquire paper PDFs and trigger text extraction
 - Decide when sufficient papers are found
 
-**Tools Available:**
-- `arxiv_search_tool(query, max_results)` - deterministic
-- `semantic_scholar_tool(query, max_results)` - deterministic
-- `semantic_search_tool(query, papers)` - re-rank by relevance
-- `citation_lookup_tool(paper_id)` - get citation counts
-- `acquire_paper_lambda(pdf_url)` - download and extract PDF
+**Tools Available (via AgentCore Gateway):**
+
+- `search_arxiv` - Lambda function for arXiv API queries
+- `search_semantic_scholar` - Lambda function for Semantic Scholar API queries
+- `acquire_paper` - Lambda function to download and retrieve paper content
+- `extract_content` - Lambda function to extract text from PDFs
+- `preprocess_text` - Lambda function to clean and preprocess extracted text
+
+> **Note:** These Lambda tools are accessed through the AWS Bedrock AgentCore Gateway using MCP protocol. See [backend/acgw/README.md](../acgw/README.md) for gateway setup and tool registration details.
 
 **Input Format:**
+
 ```json
 {
   "sub_topic": "transformer architectures for time-series",
@@ -184,6 +223,7 @@ Always provide clear success criteria so other agents know when enough work is d
 ```
 
 **Output Format:**
+
 ```json
 {
   "sub_topic_id": "transformer_architectures",
@@ -207,6 +247,7 @@ Always provide clear success criteria so other agents know when enough work is d
 ```
 
 **System Prompt Key Points:**
+
 ```
 You are a Scientific Literature Search Specialist.
 
@@ -220,9 +261,9 @@ Your search strategy:
 1. Start with most specific keyword first
 2. If too many results (>50): add narrowing terms
 3. If too few results (<5): remove terms or try synonyms
-4. Use semantic_search_tool to re-rank large result sets
-5. Use citation_lookup_tool to identify seminal papers
-6. Call acquire_paper_lambda for each selected paper
+4. Use search_arxiv and search_semantic_scholar Lambda tools via gateway
+5. Rank and filter results based on relevance
+6. Call acquire_paper Lambda tool for each selected paper
 
 Stop searching when:
 - Success criteria met (e.g., "10+ papers")
@@ -233,12 +274,13 @@ Always explain your search strategy in the output.
 ```
 
 **Iterative Search Example:**
+
 ```
-Iteration 1: arxiv_search("transformer time series") → 120 papers (too many)
-Iteration 2: arxiv_search("transformer time series forecasting") → 45 papers (better)
-Iteration 3: semantic_search(query, 45 papers) → ranked by relevance
-Iteration 4: citation_lookup(top 20 papers) → identify high-impact papers
-Iteration 5: Select top 12 papers, call acquire_paper_lambda for each
+Iteration 1: search_arxiv("transformer time series") → 120 papers (too many)
+Iteration 2: search_arxiv("transformer time series forecasting") → 45 papers (better)
+Iteration 3: Rank papers by relevance and citation count
+Iteration 4: Identify high-impact papers from top 20 results
+Iteration 5: Select top 12 papers, call acquire_paper for each
 ```
 
 ---
@@ -248,6 +290,7 @@ Iteration 5: Select top 12 papers, call acquire_paper_lambda for each
 **Role:** Technical synthesis and insight extraction specialist
 
 **Responsibilities:**
+
 - Extract key methodologies from papers
 - Identify novel contributions and innovations
 - Compare and contrast approaches across papers
@@ -255,13 +298,16 @@ Iteration 5: Select top 12 papers, call acquire_paper_lambda for each
 - Identify research gaps and unanswered questions
 - Request clarification searches for unfamiliar terms
 
-**Tools Available:**
-- `read_paper_text(s3_path)` - retrieve extracted text from S3
-- `extract_equations(s3_path)` - parse mathematical content
-- `extract_figures(s3_path)` - analyze diagrams and charts
-- `request_clarification_search(term, context)` - trigger mini-search for unfamiliar terms
+**Tools Available (via AgentCore Gateway):**
+
+- `extract_content` - Lambda function to retrieve and extract text from papers stored in S3
+- `preprocess_text` - Lambda function to clean and preprocess extracted text for analysis
+- Additional analysis tools as needed for paper processing
+
+> **Note:** The Analyzer primarily works with paper content retrieved and cached in S3 by the Searcher Agent's tool invocations.
 
 **Input Format:**
+
 ```json
 {
   "sub_topic": "transformer architectures",
@@ -277,6 +323,7 @@ Iteration 5: Select top 12 papers, call acquire_paper_lambda for each
 ```
 
 **Output Format:**
+
 ```json
 {
   "sub_topic_id": "transformer_architectures",
@@ -335,6 +382,7 @@ Iteration 5: Select top 12 papers, call acquire_paper_lambda for each
 ```
 
 **System Prompt Key Points:**
+
 ```
 You are a Scientific Paper Analysis Expert.
 
@@ -360,6 +408,7 @@ Format all quantitative results consistently for easy comparison.
 ```
 
 **Handling Unfamiliar Terms:**
+
 ```
 Analyzer reads paper mentioning "optogenetic rescue"
 → Realizes term is critical but not explained
@@ -376,6 +425,7 @@ Analyzer reads paper mentioning "optogenetic rescue"
 **Role:** Quality assurance and validation specialist
 
 **Responsibilities:**
+
 - Evaluate completeness of research coverage
 - Identify gaps in analysis or missing perspectives
 - Verify accuracy of technical summaries
@@ -386,18 +436,26 @@ Analyzer reads paper mentioning "optogenetic rescue"
 **Tools Available:** None (pure reasoning agent)
 
 **Input Format:**
+
 ```json
 {
   "original_query": "Impact of transformer models on time-series forecasting",
-  "plan": { /* PlannerAgent output */ },
+  "plan": {
+    /* PlannerAgent output */
+  },
   "analyses": [
-    { /* AnalyzerAgent output for sub_topic_1 */ },
-    { /* AnalyzerAgent output for sub_topic_2 */ }
+    {
+      /* AnalyzerAgent output for sub_topic_1 */
+    },
+    {
+      /* AnalyzerAgent output for sub_topic_2 */
+    }
   ]
 }
 ```
 
 **Output Format:**
+
 ```json
 {
   "verdict": "REVISE",
@@ -450,11 +508,13 @@ Analyzer reads paper mentioning "optogenetic rescue"
 ```
 
 **Verdict Options:**
+
 - `APPROVED` - Research is complete, proceed to report generation
 - `REVISE` - Specific issues need addressing, provide required_revisions
 - `INSUFFICIENT` - Fundamental problems, may need to restart with new plan
 
 **System Prompt Key Points:**
+
 ```
 You are a Research Quality Assurance Specialist.
 
@@ -475,11 +535,12 @@ Approval standards:
 - Research gaps identified
 - Quantitative evidence provided
 
-You can require up to 2 revision cycles. After that, accept what's available 
+You can require up to 2 revision cycles. After that, accept what's available
 to prevent infinite loops.
 ```
 
 **Iteration Triggers:**
+
 ```
 Common revision scenarios:
 
@@ -506,6 +567,7 @@ Common revision scenarios:
 **Role:** Communication and presentation specialist
 
 **Responsibilities:**
+
 - Compile research findings into comprehensive report
 - Structure content with clear sections and flow
 - Generate executive summary and key findings
@@ -514,21 +576,30 @@ Common revision scenarios:
 - Format for readability (markdown)
 
 **Tools Available:**
+
 - `citation_formatter(papers)` - generate bibliography
 - `create_comparison_table(data)` - format quantitative results
 - `generate_chart(data, type)` - create visualizations
 
 **Input Format:**
+
 ```json
 {
   "original_query": "...",
-  "plan": { /* PlannerAgent output */ },
-  "analyses": [ /* All AnalyzerAgent outputs */ ],
-  "critique_feedback": { /* Final CritiqueAgent output with verdict=APPROVED */ }
+  "plan": {
+    /* PlannerAgent output */
+  },
+  "analyses": [
+    /* All AnalyzerAgent outputs */
+  ],
+  "critique_feedback": {
+    /* Final CritiqueAgent output with verdict=APPROVED */
+  }
 }
 ```
 
 **Output Format:**
+
 ```markdown
 # Research Report: Impact of Transformer Models on Time-Series Forecasting
 
@@ -539,9 +610,11 @@ Common revision scenarios:
 ## Introduction
 
 ### Research Question
+
 [Restate original query in formal terms]
 
 ### Methodology
+
 [Explain research approach: papers analyzed, databases searched, selection criteria]
 
 ## Background: Traditional Time-Series Methods
@@ -549,10 +622,12 @@ Common revision scenarios:
 [Analysis from baseline_methods sub-topic]
 
 ### Key Papers
+
 - Author et al. (2020). "ARIMA approaches..." [Citation]
 - ...
 
 ### Summary of Findings
+
 [Synthesized insights]
 
 ## Transformer Architectures for Time-Series
@@ -560,14 +635,15 @@ Common revision scenarios:
 [Analysis from transformer_architectures sub-topic]
 
 ### Architectural Innovations
+
 [Key methodological advances]
 
 ### Performance Comparison
 
 | Architecture | Benchmark | Metric | Score | Improvement vs LSTM |
-|--------------|-----------|--------|-------|---------------------|
-| TFT | M4 | SMAPE | 12.3 | 15% |
-| Informer | ETTh1 | MSE | 0.098 | 22% |
+| ------------ | --------- | ------ | ----- | ------------------- |
+| TFT          | M4        | SMAPE  | 12.3  | 15%                 |
+| Informer     | ETTh1     | MSE    | 0.098 | 22%                 |
 
 [Generated via create_comparison_table tool]
 
@@ -578,23 +654,29 @@ Common revision scenarios:
 ## Cross-Study Synthesis
 
 ### Common Themes
+
 [Patterns identified across all papers]
 
 ### Contradictions and Reconciliation
+
 [Conflicting results and explanations]
 
 ### Research Gaps Identified
+
 [Unanswered questions from critique]
 
 ## Conclusions
 
 ### Key Takeaways
+
 [Bullet point summary]
 
 ### Practical Implications
+
 [What this means for practitioners]
 
 ### Future Research Directions
+
 [Suggested next steps based on gaps]
 
 ## References
@@ -604,18 +686,22 @@ Common revision scenarios:
 ## Appendix: Methodology Details
 
 ### Search Queries Used
+
 [Transparency about how papers were found]
 
 ### Selection Criteria
+
 [Why certain papers included/excluded]
 
 ### Papers Reviewed
+
 - [Count] papers from arXiv
 - [Count] papers from Semantic Scholar
 - Date range: [Start] to [End]
 ```
 
 **System Prompt Key Points:**
+
 ```
 You are a Technical Report Writer.
 
@@ -634,7 +720,7 @@ Style guidelines:
 - Support claims with citations
 - Use tables/charts to summarize quantitative data
 
-The report should stand alone - reader shouldn't need to see intermediate 
+The report should stand alone - reader shouldn't need to see intermediate
 outputs from other agents.
 ```
 
@@ -643,9 +729,11 @@ outputs from other agents.
 ## Complete Workflow Example
 
 ### User Query
+
 "What are the ethical considerations in using CRISPR for human embryo editing?"
 
 ### Step 1: Initial Assessment
+
 ```
 Orchestrator receives query
 → Determines this is complex (involves ethics AND science)
@@ -653,6 +741,7 @@ Orchestrator receives query
 ```
 
 ### Step 2: Planning
+
 ```
 PlannerAgent output:
 {
@@ -677,20 +766,22 @@ PlannerAgent output:
 ```
 
 ### Step 3: Literature Search (Technical Capabilities)
+
 ```
 Orchestrator → SearcherAgent (sub_topic: technical_capabilities)
 
 SearcherAgent execution:
-1. arxiv_search("CRISPR off-target") → 80 papers
+1. search_arxiv("CRISPR off-target") → 80 papers
 2. Filter by date (2023-2025) → 30 papers
-3. semantic_search for relevance → Top 15
-4. citation_lookup → Identify 3 seminal papers not in results
+3. Rank by relevance → Top 15
+4. Identify 3 seminal papers not in results
 5. Final selection: 18 papers
-6. acquire_paper_lambda for all 18
+6. acquire_paper for all 18 (via AgentCore Gateway)
 7. Return paper list to Orchestrator
 ```
 
 ### Step 4: Analysis (Technical Capabilities)
+
 ```
 Orchestrator → AnalyzerAgent (papers: 18)
 
@@ -710,6 +801,7 @@ Output includes:
 ```
 
 ### Step 5-6: Repeat for Other Sub-topics
+
 ```
 Orchestrator executes same flow for:
 - ethical_frameworks (finds 12 papers)
@@ -717,6 +809,7 @@ Orchestrator executes same flow for:
 ```
 
 ### Step 7: Quality Check
+
 ```
 Orchestrator → CritiqueAgent (all 3 analyses)
 
@@ -734,6 +827,7 @@ CritiqueAgent output:
 ```
 
 ### Step 8: Revision Iteration
+
 ```
 Orchestrator → SearcherAgent (new query from critique)
 SearcherAgent → Finds 5 more papers
@@ -748,6 +842,7 @@ CritiqueAgent output:
 ```
 
 ### Step 9: Report Generation
+
 ```
 Orchestrator → ReporterAgent (all approved analyses)
 
@@ -764,6 +859,7 @@ Returns final markdown report
 ```
 
 ### Step 10: Delivery
+
 ```
 Orchestrator:
 - Saves report to S3
@@ -777,6 +873,7 @@ Orchestrator:
 ## Handling Edge Cases
 
 ### Case 1: Search Returns No Papers
+
 ```
 SearcherAgent tries: "very_specific_niche_topic"
 → 0 results
@@ -797,8 +894,9 @@ Orchestrator receives empty results
 ```
 
 ### Case 2: Analyzer Encounters Paywalled Papers
+
 ```
-acquire_paper_lambda fails for 3 papers (paywall)
+acquire_paper Lambda fails for 3 papers (paywall)
 
 SearcherAgent marks those papers:
 {
@@ -812,11 +910,12 @@ CritiqueAgent notes in feedback: "Some papers unavailable, may affect completene
 ```
 
 ### Case 3: Infinite Iteration Loop Prevention
+
 ```
 Orchestrator tracks revision count:
 
 Iteration 1: Critique says REVISE → continue
-Iteration 2: Critique says REVISE → continue  
+Iteration 2: Critique says REVISE → continue
 Iteration 3: Critique says REVISE → STOP
 
 Orchestrator overrides:
@@ -826,6 +925,7 @@ CritiqueAgent's concerns noted in final report appendix.
 ```
 
 ### Case 4: Clarification Search During Analysis
+
 ```
 AnalyzerAgent reading paper mentions "optogenetic rescue"
 → Term is unfamiliar but seems important
@@ -835,7 +935,7 @@ request_clarification_search("optogenetic rescue", "CRISPR therapy context")
 
 This tool invokes SearcherAgent as sub-task:
 SearcherAgent mini-search → finds 3 explanatory papers
-→ acquire_paper_lambda → extract key sections
+→ acquire_paper → extract key sections (via gateway)
 → Return definition and context to AnalyzerAgent
 
 AnalyzerAgent incorporates understanding:
@@ -861,11 +961,11 @@ Every agent action triggers a notification:
 
 {
   "timestamp": "2025-09-30T14:23:18Z",
-  "agent": "searcher_agent", 
+  "agent": "searcher_agent",
   "action": "tool_call",
-  "thought": "Invoking arxiv_search_tool",
+  "thought": "Invoking search_arxiv via AgentCore Gateway",
   "data": {
-    "tool_name": "arxiv_search_tool",
+    "tool_name": "search_arxiv",
     "input": {"query": "CRISPR off-target", "date_filter": "2023-2025"}
   }
 }
@@ -888,6 +988,7 @@ Users see agents "thinking" in real-time, building trust through transparency.
 ### Agent System Prompts
 
 Each agent needs a carefully crafted system prompt that:
+
 1. Defines its role and responsibilities
 2. Specifies decision-making criteria
 3. Describes output format
@@ -897,6 +998,7 @@ Each agent needs a carefully crafted system prompt that:
 ### Tool Implementation
 
 All deterministic tools must:
+
 1. Use caching to ensure consistency (same input → same output)
 2. Handle errors gracefully
 3. Return structured data
@@ -905,6 +1007,7 @@ All deterministic tools must:
 ### Orchestrator State Management
 
 Orchestrator must track:
+
 - Current workflow phase
 - Which sub-topics completed
 - Iteration count per sub-topic
@@ -914,6 +1017,7 @@ Orchestrator must track:
 ### Termination Conditions
 
 Clear rules for when to stop:
+
 - Critique approves (normal case)
 - Max iterations reached (3 cycles)
 - No papers found after multiple search attempts
@@ -924,26 +1028,74 @@ Clear rules for when to stop:
 
 ## Technology Stack
 
-- **Agents:** AWS Strands Agents SDK v1.0+
-- **LLM:** Amazon Bedrock (Alibaba Qwen)
-- **Compute:** AWS Lambda (15min timeout, 3GB memory)
-- **State:** Amazon DynamoDB
-- **Storage:** Amazon S3
-- **Real-time & Observability:** Strands Agents SDK, API Gateway WebSocket
-- **Observability:** CloudWatch + X-Ray
+- **Agent Hosting:** AWS Bedrock AgentCore Runtime (hosts all Strands agents)
+- **Agent Framework:** AWS Strands Agents SDK v1.0+
+- **Tool Gateway:** AWS Bedrock AgentCore Gateway (MCP protocol for Lambda tool access)
+- **LLM:** Amazon Bedrock (Claude Sonnet 4 for orchestration, Claude 3.5 Sonnet for reporting)
+- **Tool Compute:** AWS Lambda (deterministic tools: search_arxiv, search_semantic_scholar, acquire_paper, extract_content, preprocess_text)
+- **Storage:** Amazon S3 (paper caching and report storage)
+- **Authentication:** Amazon Cognito (OAuth authorizer for gateway)
+- **Frontend:** Streamlit (interactive chat interface with real-time agent status)
+- **Observability:** Strands SDK built-in observability, CloudWatch + X-Ray
+
+> **For detailed deployment instructions**, see [docs/architecture.md](../../docs/architecture.md) and [backend/acgw/README.md](../acgw/README.md).
 
 ---
 
 ## Success Metrics
 
 The system should demonstrate:
+
 1. **Autonomy:** Agents make decisions without human intervention
-2. **Collaboration:** Clear handoffs between agents via A2A protocol
+2. **Collaboration:** Clear handoffs between agents via `@tool` decorator pattern
 3. **Quality:** Critique-driven iteration improves output
-4. **Transparency:** Glass Box shows all agent reasoning
-5. **Scalability:** Handles multiple concurrent research tasks
+4. **Transparency:** Glass Box shows all agent reasoning through Streamlit interface
+5. **Scalability:** Handles multiple concurrent research tasks via AgentCore Runtime
 
 This architecture positions the submission strongly for:
+
 - Best Strands SDK Implementation ($3k)
 - Best Amazon Bedrock AgentCore Implementation ($3k)
-- Top 3 overall placements ($16k/$9k/$5k)
+
+---
+
+## Implementation Status
+
+### ✅ Implemented Agent Features
+
+- **Orchestrator Agent**: Workflow coordination with Claude Sonnet 4
+- **Planner Agent**: Research strategy and sub-topic decomposition
+- **Searcher Agent**: Literature discovery with MCP tool access
+- **Analyzer Agent**: Deep technical synthesis and cross-paper analysis
+- **Critique Agent**: Quality assurance with revision feedback
+- **Reporter Agent**: Modular report generation with section-by-section approach
+- **State Management**: ToolContext-based workflow state across all agents
+- **Agent-to-Agent Communication**: @tool decorator pattern for specialist invocation
+- **Tool Integration**: MCP client for secure Lambda tool access via gateway
+
+### 🚧 Future Agent Enhancements
+
+- **Clarification Search**: Automated mini-searches for unfamiliar technical terms
+- **Parallel Analysis**: Concurrent paper analysis for improved performance
+- **Adaptive Planning**: Dynamic plan adjustment based on search results
+- **Citation Validation**: Automated verification of paper citations
+- **Multi-Language Analysis**: Support for non-English papers
+- **Domain-Specific Agents**: Specialized agents for medical, legal, or technical research
+- **Interactive Critique**: User feedback integration during quality review
+- **Learning from History**: Agent improvement based on past research sessions
+
+### ❌ Deprecated Patterns
+
+The following patterns were considered but **not implemented**:
+
+- **Lambda-Based Agents**: All agents run in AgentCore Runtime instead
+- **Direct Tool Invocation**: All tools accessed via AgentCore Gateway with MCP
+- **External State Storage**: In-memory ToolContext sufficient for current workflows
+- **Synchronous WebSocket Updates**: CloudWatch logging used instead
+
+## Related Documentation
+
+- **[docs/architecture.md](../../docs/architecture.md)** - Complete system architecture and AWS service integration
+- **[docs/comprehensive.md](../../docs/comprehensive.md)** - Detailed implementation guide with code examples
+- **[backend/acgw/README.md](../acgw/README.md)** - AgentCore Gateway setup and Lambda tool registration
+- **[README.md](../../README.md)** - Project overview and quick start guide
